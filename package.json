@@ -1,34 +1,33 @@
 {
-  "name": "javascript-action",
-  "version": "1.0.0",
-  "description": "JavaScript Action Template",
+  "name": "keep-last-n-releases",
+  "version": "0.1.0",
+  "description": "A GitHub Action to keep only the last N releases",
   "main": "index.js",
   "scripts": {
     "lint": "eslint index.js",
-    "package": "ncc build index.js -o dist",
-    "test": "eslint index.js && jest"
+    "package": "ncc build index.js -o dist"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/actions/javascript-action.git"
+    "url": "git+https://github.com/eregon/keep-last-n-releases.git"
   },
   "keywords": [
     "GitHub",
     "Actions",
-    "JavaScript"
+    "Releases"
   ],
-  "author": "GitHub",
+  "author": "Benoit Daloze",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/actions/javascript-action/issues"
+    "url": "https://github.com/eregon/keep-last-n-releases/issues"
   },
-  "homepage": "https://github.com/actions/javascript-action#readme",
+  "homepage": "https://github.com/eregon/keep-last-n-releases",
   "dependencies": {
-    "@actions/core": "^1.1.1"
+    "@actions/core": "^1.1.1",
+    "@actions/github": "^2.1.0"
   },
   "devDependencies": {
     "@zeit/ncc": "^0.20.5",
-    "eslint": "^6.3.0",
-    "jest": "^24.9.0"
+    "eslint": "^6.3.0"
   }
 }

@@ -1,25 +1,12 @@
-name: "units-test"
-on:
-  pull_request:
-  push:
-    branches:
-      - master
-      - 'releases/*'
-
+name: "Test this action"
+on: [push]
 jobs:
-  # unit tests
-  units:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-    - run: npm ci
-    - run: npm test
-
-  # test action works running from the graph  
   test:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
     - uses: ./
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        milliseconds: 1000
+        n: 1

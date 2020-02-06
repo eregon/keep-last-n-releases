@@ -1,13 +1,18 @@
-name: 'Wait'
-description: 'Wait a designated number of milliseconds'
+name: 'Keep last N releases'
+description: 'A GitHub Action to keep only the last N releases'
 inputs:
-  milliseconds:  # id of input
-    description: 'number of milliseconds to wait'
+  n:
+    description: 'Number of releases to keep'
     required: true
-    default: '1000'
-outputs:
-  time: # output will be available to future steps 
-    description: 'The message to output'
+  last_tag_file:
+    description: 'File containing the tag of the last successful release, which should not be deleted'
+    required: false
+    default: ''
+  dry_run:
+    description: 'Actually delete releases'
+    required: false
+    default: 'false'
+
 runs:
   using: 'node12'
   main: 'dist/index.js'
