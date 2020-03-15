@@ -46,19 +46,49 @@ module.exports =
 /***/ 0:
 /***/ (function(module, __unusedexports, __webpack_require__) {
 
-module.exports = withDefaults
+const { requestLog } = __webpack_require__(916);
+const {
+  restEndpointMethods
+} = __webpack_require__(842);
 
-const graphql = __webpack_require__(500)
+const Core = __webpack_require__(529);
 
-function withDefaults (request, newDefaults) {
-  const newRequest = request.defaults(newDefaults)
-  const newApi = function (query, options) {
-    return graphql(newRequest, query, options)
-  }
+const CORE_PLUGINS = [
+  __webpack_require__(190),
+  __webpack_require__(19), // deprecated: remove in v17
+  requestLog,
+  __webpack_require__(148),
+  restEndpointMethods,
+  __webpack_require__(430),
 
-  newApi.defaults = withDefaults.bind(null, newRequest)
-  return newApi
+  __webpack_require__(850) // deprecated: remove in v17
+];
+
+const OctokitRest = Core.plugin(CORE_PLUGINS);
+
+function DeprecatedOctokit(options) {
+  const warn =
+    options && options.log && options.log.warn
+      ? options.log.warn
+      : console.warn;
+  warn(
+    '[@octokit/rest] `const Octokit = require("@octokit/rest")` is deprecated. Use `const { Octokit } = require("@octokit/rest")` instead'
+  );
+  return new OctokitRest(options);
 }
+
+const Octokit = Object.assign(DeprecatedOctokit, {
+  Octokit: OctokitRest
+});
+
+Object.keys(OctokitRest).forEach(key => {
+  /* istanbul ignore else */
+  if (OctokitRest.hasOwnProperty(key)) {
+    Octokit[key] = OctokitRest[key];
+  }
+});
+
+module.exports = Octokit;
 
 
 /***/ }),
@@ -258,6 +288,13 @@ function wrappy (fn, cb) {
 
 /***/ }),
 
+/***/ 16:
+/***/ (function(module) {
+
+module.exports = require("tls");
+
+/***/ }),
+
 /***/ 18:
 /***/ (function() {
 
@@ -389,7 +426,1932 @@ function factory(plugins) {
 
 /***/ }),
 
-/***/ 48:
+/***/ 49:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+"use strict";
+
+const os = __webpack_require__(87);
+const execa = __webpack_require__(955);
+
+// Reference: https://www.gaijin.at/en/lstwinver.php
+const names = new Map([
+	['10.0', '10'],
+	['6.3', '8.1'],
+	['6.2', '8'],
+	['6.1', '7'],
+	['6.0', 'Vista'],
+	['5.2', 'Server 2003'],
+	['5.1', 'XP'],
+	['5.0', '2000'],
+	['4.9', 'ME'],
+	['4.1', '98'],
+	['4.0', '95']
+]);
+
+const windowsRelease = release => {
+	const version = /\d+\.\d/.exec(release || os.release());
+
+	if (release && !version) {
+		throw new Error('`release` argument doesn\'t match `n.n`');
+	}
+
+	const ver = (version || [])[0];
+
+	// Server 2008, 2012 and 2016 versions are ambiguous with desktop versions and must be detected at runtime.
+	// If `release` is omitted or we're on a Windows system, and the version number is an ambiguous version
+	// then use `wmic` to get the OS caption: https://msdn.microsoft.com/en-us/library/aa394531(v=vs.85).aspx
+	// If the resulting caption contains the year 2008, 2012 or 2016, it is a server version, so return a server OS name.
+	if ((!release || release === os.release()) && ['6.1', '6.2', '6.3', '10.0'].includes(ver)) {
+		const stdout = execa.sync('wmic', ['os', 'get', 'Caption']).stdout || '';
+		const year = (stdout.match(/2008|2012|2016/) || [])[0];
+		if (year) {
+			return `Server ${year}`;
+		}
+	}
+
+	return names.get(ver);
+};
+
+module.exports = windowsRelease;
+
+
+/***/ }),
+
+/***/ 87:
+/***/ (function(module) {
+
+module.exports = require("os");
+
+/***/ }),
+
+/***/ 104:
+/***/ (function(__unusedmodule, __unusedexports, __webpack_require__) {
+
+const fs = __webpack_require__(747)
+const core = __webpack_require__(470)
+const { GitHub, context } = __webpack_require__(469)
+
+async function main() {
+  const n = parseInt(core.getInput('n'))
+  if (n < 1) {
+    throw new Error(`input n should be >= 1 (was ${n})`)
+  }
+
+  const dryRun = core.getInput('dry_run') === 'true'
+
+  const lastTagFile = core.getInput('last_tag_file')
+
+  const github = new GitHub(process.env.GITHUB_TOKEN)
+  const { owner, repo } = context.repo
+
+  let { data: releases } = await github.repos.listReleases({ owner, repo })
+
+  // Ignore draft releases
+  releases = releases.filter(release => !release.draft)
+
+  // Sort by older to newest
+  releases.sort((a, b) => Date.parse(a.published_at) <= Date.parse(b.published_at) ? -1 : 1)
+
+  console.log(`All ${releases.length} releases (oldest to newest):`)
+  for (const release of releases) {
+    console.log(formatRelease(release))
+  }
+
+  let toDelete
+  if (releases.length <= n) {
+    console.log(`Only ${releases.length} releases left (<= n=${n}), not deleting any`)
+    toDelete = []
+  } else {
+    toDelete = releases.slice(0, releases.length - n)
+  }
+
+  if (lastTagFile !== '') {
+    const lastTag = fs.readFileSync(lastTagFile, 'utf8').trim()
+    console.log(`Keeping release with tag ${lastTag}`)
+    toDelete = toDelete.filter(release => release.tag_name !== lastTag)
+  }
+
+  console.log('Kept releases:')
+  for (const release of releases.filter(release => !toDelete.includes(release))) {
+    console.log(formatRelease(release))
+  }
+
+  console.log(`${toDelete.length} releases to be deleted:`)
+  for (const release of toDelete) {
+    if (dryRun) {
+      console.log(`Would delete ${formatRelease(release)}`)
+    } else {
+      console.log(`Deleting ${formatRelease(release)}`)
+      await github.repos.deleteRelease({ owner, repo, release_id: release.id })
+
+      const tag = release.tag_name
+      console.log(`Deleting tag ${tag}`)
+      await github.git.deleteRef({ owner, repo, ref: `tags/${tag}` })
+    }
+  }
+
+  console.log('Done')
+}
+
+function formatRelease(release) {
+  return `Release published at ${release.published_at}, tag: ${release.tag_name}`
+}
+
+async function run() {
+  try {
+    await main()
+  } catch (error) {
+    core.setFailed(error.message)
+  }
+}
+
+run()
+
+
+/***/ }),
+
+/***/ 118:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+"use strict";
+
+const os = __webpack_require__(87);
+
+const nameMap = new Map([
+	[19, 'Catalina'],
+	[18, 'Mojave'],
+	[17, 'High Sierra'],
+	[16, 'Sierra'],
+	[15, 'El Capitan'],
+	[14, 'Yosemite'],
+	[13, 'Mavericks'],
+	[12, 'Mountain Lion'],
+	[11, 'Lion'],
+	[10, 'Snow Leopard'],
+	[9, 'Leopard'],
+	[8, 'Tiger'],
+	[7, 'Panther'],
+	[6, 'Jaguar'],
+	[5, 'Puma']
+]);
+
+const macosRelease = release => {
+	release = Number((release || os.release()).split('.')[0]);
+	return {
+		name: nameMap.get(release),
+		version: '10.' + (release - 4)
+	};
+};
+
+module.exports = macosRelease;
+// TODO: remove this in the next major version
+module.exports.default = macosRelease;
+
+
+/***/ }),
+
+/***/ 126:
+/***/ (function(module) {
+
+/**
+ * lodash (Custom Build) <https://lodash.com/>
+ * Build: `lodash modularize exports="npm" -o ./`
+ * Copyright jQuery Foundation and other contributors <https://jquery.org/>
+ * Released under MIT license <https://lodash.com/license>
+ * Based on Underscore.js 1.8.3 <http://underscorejs.org/LICENSE>
+ * Copyright Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
+ */
+
+/** Used as the size to enable large array optimizations. */
+var LARGE_ARRAY_SIZE = 200;
+
+/** Used to stand-in for `undefined` hash values. */
+var HASH_UNDEFINED = '__lodash_hash_undefined__';
+
+/** Used as references for various `Number` constants. */
+var INFINITY = 1 / 0;
+
+/** `Object#toString` result references. */
+var funcTag = '[object Function]',
+    genTag = '[object GeneratorFunction]';
+
+/**
+ * Used to match `RegExp`
+ * [syntax characters](http://ecma-international.org/ecma-262/7.0/#sec-patterns).
+ */
+var reRegExpChar = /[\\^$.*+?()[\]{}|]/g;
+
+/** Used to detect host constructors (Safari). */
+var reIsHostCtor = /^\[object .+?Constructor\]$/;
+
+/** Detect free variable `global` from Node.js. */
+var freeGlobal = typeof global == 'object' && global && global.Object === Object && global;
+
+/** Detect free variable `self`. */
+var freeSelf = typeof self == 'object' && self && self.Object === Object && self;
+
+/** Used as a reference to the global object. */
+var root = freeGlobal || freeSelf || Function('return this')();
+
+/**
+ * A specialized version of `_.includes` for arrays without support for
+ * specifying an index to search from.
+ *
+ * @private
+ * @param {Array} [array] The array to inspect.
+ * @param {*} target The value to search for.
+ * @returns {boolean} Returns `true` if `target` is found, else `false`.
+ */
+function arrayIncludes(array, value) {
+  var length = array ? array.length : 0;
+  return !!length && baseIndexOf(array, value, 0) > -1;
+}
+
+/**
+ * This function is like `arrayIncludes` except that it accepts a comparator.
+ *
+ * @private
+ * @param {Array} [array] The array to inspect.
+ * @param {*} target The value to search for.
+ * @param {Function} comparator The comparator invoked per element.
+ * @returns {boolean} Returns `true` if `target` is found, else `false`.
+ */
+function arrayIncludesWith(array, value, comparator) {
+  var index = -1,
+      length = array ? array.length : 0;
+
+  while (++index < length) {
+    if (comparator(value, array[index])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The base implementation of `_.findIndex` and `_.findLastIndex` without
+ * support for iteratee shorthands.
+ *
+ * @private
+ * @param {Array} array The array to inspect.
+ * @param {Function} predicate The function invoked per iteration.
+ * @param {number} fromIndex The index to search from.
+ * @param {boolean} [fromRight] Specify iterating from right to left.
+ * @returns {number} Returns the index of the matched value, else `-1`.
+ */
+function baseFindIndex(array, predicate, fromIndex, fromRight) {
+  var length = array.length,
+      index = fromIndex + (fromRight ? 1 : -1);
+
+  while ((fromRight ? index-- : ++index < length)) {
+    if (predicate(array[index], index, array)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The base implementation of `_.indexOf` without `fromIndex` bounds checks.
+ *
+ * @private
+ * @param {Array} array The array to inspect.
+ * @param {*} value The value to search for.
+ * @param {number} fromIndex The index to search from.
+ * @returns {number} Returns the index of the matched value, else `-1`.
+ */
+function baseIndexOf(array, value, fromIndex) {
+  if (value !== value) {
+    return baseFindIndex(array, baseIsNaN, fromIndex);
+  }
+  var index = fromIndex - 1,
+      length = array.length;
+
+  while (++index < length) {
+    if (array[index] === value) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The base implementation of `_.isNaN` without support for number objects.
+ *
+ * @private
+ * @param {*} value The value to check.
+ * @returns {boolean} Returns `true` if `value` is `NaN`, else `false`.
+ */
+function baseIsNaN(value) {
+  return value !== value;
+}
+
+/**
+ * Checks if a cache value for `key` exists.
+ *
+ * @private
+ * @param {Object} cache The cache to query.
+ * @param {string} key The key of the entry to check.
+ * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
+ */
+function cacheHas(cache, key) {
+  return cache.has(key);
+}
+
+/**
+ * Gets the value at `key` of `object`.
+ *
+ * @private
+ * @param {Object} [object] The object to query.
+ * @param {string} key The key of the property to get.
+ * @returns {*} Returns the property value.
+ */
+function getValue(object, key) {
+  return object == null ? undefined : object[key];
+}
+
+/**
+ * Checks if `value` is a host object in IE < 9.
+ *
+ * @private
+ * @param {*} value The value to check.
+ * @returns {boolean} Returns `true` if `value` is a host object, else `false`.
+ */
+function isHostObject(value) {
+  // Many host objects are `Object` objects that can coerce to strings
+  // despite having improperly defined `toString` methods.
+  var result = false;
+  if (value != null && typeof value.toString != 'function') {
+    try {
+      result = !!(value + '');
+    } catch (e) {}
+  }
+  return result;
+}
+
+/**
+ * Converts `set` to an array of its values.
+ *
+ * @private
+ * @param {Object} set The set to convert.
+ * @returns {Array} Returns the values.
+ */
+function setToArray(set) {
+  var index = -1,
+      result = Array(set.size);
+
+  set.forEach(function(value) {
+    result[++index] = value;
+  });
+  return result;
+}
+
+/** Used for built-in method references. */
+var arrayProto = Array.prototype,
+    funcProto = Function.prototype,
+    objectProto = Object.prototype;
+
+/** Used to detect overreaching core-js shims. */
+var coreJsData = root['__core-js_shared__'];
+
+/** Used to detect methods masquerading as native. */
+var maskSrcKey = (function() {
+  var uid = /[^.]+$/.exec(coreJsData && coreJsData.keys && coreJsData.keys.IE_PROTO || '');
+  return uid ? ('Symbol(src)_1.' + uid) : '';
+}());
+
+/** Used to resolve the decompiled source of functions. */
+var funcToString = funcProto.toString;
+
+/** Used to check objects for own properties. */
+var hasOwnProperty = objectProto.hasOwnProperty;
+
+/**
+ * Used to resolve the
+ * [`toStringTag`](http://ecma-international.org/ecma-262/7.0/#sec-object.prototype.tostring)
+ * of values.
+ */
+var objectToString = objectProto.toString;
+
+/** Used to detect if a method is native. */
+var reIsNative = RegExp('^' +
+  funcToString.call(hasOwnProperty).replace(reRegExpChar, '\\$&')
+  .replace(/hasOwnProperty|(function).*?(?=\\\()| for .+?(?=\\\])/g, '$1.*?') + '$'
+);
+
+/** Built-in value references. */
+var splice = arrayProto.splice;
+
+/* Built-in method references that are verified to be native. */
+var Map = getNative(root, 'Map'),
+    Set = getNative(root, 'Set'),
+    nativeCreate = getNative(Object, 'create');
+
+/**
+ * Creates a hash object.
+ *
+ * @private
+ * @constructor
+ * @param {Array} [entries] The key-value pairs to cache.
+ */
+function Hash(entries) {
+  var index = -1,
+      length = entries ? entries.length : 0;
+
+  this.clear();
+  while (++index < length) {
+    var entry = entries[index];
+    this.set(entry[0], entry[1]);
+  }
+}
+
+/**
+ * Removes all key-value entries from the hash.
+ *
+ * @private
+ * @name clear
+ * @memberOf Hash
+ */
+function hashClear() {
+  this.__data__ = nativeCreate ? nativeCreate(null) : {};
+}
+
+/**
+ * Removes `key` and its value from the hash.
+ *
+ * @private
+ * @name delete
+ * @memberOf Hash
+ * @param {Object} hash The hash to modify.
+ * @param {string} key The key of the value to remove.
+ * @returns {boolean} Returns `true` if the entry was removed, else `false`.
+ */
+function hashDelete(key) {
+  return this.has(key) && delete this.__data__[key];
+}
+
+/**
+ * Gets the hash value for `key`.
+ *
+ * @private
+ * @name get
+ * @memberOf Hash
+ * @param {string} key The key of the value to get.
+ * @returns {*} Returns the entry value.
+ */
+function hashGet(key) {
+  var data = this.__data__;
+  if (nativeCreate) {
+    var result = data[key];
+    return result === HASH_UNDEFINED ? undefined : result;
+  }
+  return hasOwnProperty.call(data, key) ? data[key] : undefined;
+}
+
+/**
+ * Checks if a hash value for `key` exists.
+ *
+ * @private
+ * @name has
+ * @memberOf Hash
+ * @param {string} key The key of the entry to check.
+ * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
+ */
+function hashHas(key) {
+  var data = this.__data__;
+  return nativeCreate ? data[key] !== undefined : hasOwnProperty.call(data, key);
+}
+
+/**
+ * Sets the hash `key` to `value`.
+ *
+ * @private
+ * @name set
+ * @memberOf Hash
+ * @param {string} key The key of the value to set.
+ * @param {*} value The value to set.
+ * @returns {Object} Returns the hash instance.
+ */
+function hashSet(key, value) {
+  var data = this.__data__;
+  data[key] = (nativeCreate && value === undefined) ? HASH_UNDEFINED : value;
+  return this;
+}
+
+// Add methods to `Hash`.
+Hash.prototype.clear = hashClear;
+Hash.prototype['delete'] = hashDelete;
+Hash.prototype.get = hashGet;
+Hash.prototype.has = hashHas;
+Hash.prototype.set = hashSet;
+
+/**
+ * Creates an list cache object.
+ *
+ * @private
+ * @constructor
+ * @param {Array} [entries] The key-value pairs to cache.
+ */
+function ListCache(entries) {
+  var index = -1,
+      length = entries ? entries.length : 0;
+
+  this.clear();
+  while (++index < length) {
+    var entry = entries[index];
+    this.set(entry[0], entry[1]);
+  }
+}
+
+/**
+ * Removes all key-value entries from the list cache.
+ *
+ * @private
+ * @name clear
+ * @memberOf ListCache
+ */
+function listCacheClear() {
+  this.__data__ = [];
+}
+
+/**
+ * Removes `key` and its value from the list cache.
+ *
+ * @private
+ * @name delete
+ * @memberOf ListCache
+ * @param {string} key The key of the value to remove.
+ * @returns {boolean} Returns `true` if the entry was removed, else `false`.
+ */
+function listCacheDelete(key) {
+  var data = this.__data__,
+      index = assocIndexOf(data, key);
+
+  if (index < 0) {
+    return false;
+  }
+  var lastIndex = data.length - 1;
+  if (index == lastIndex) {
+    data.pop();
+  } else {
+    splice.call(data, index, 1);
+  }
+  return true;
+}
+
+/**
+ * Gets the list cache value for `key`.
+ *
+ * @private
+ * @name get
+ * @memberOf ListCache
+ * @param {string} key The key of the value to get.
+ * @returns {*} Returns the entry value.
+ */
+function listCacheGet(key) {
+  var data = this.__data__,
+      index = assocIndexOf(data, key);
+
+  return index < 0 ? undefined : data[index][1];
+}
+
+/**
+ * Checks if a list cache value for `key` exists.
+ *
+ * @private
+ * @name has
+ * @memberOf ListCache
+ * @param {string} key The key of the entry to check.
+ * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
+ */
+function listCacheHas(key) {
+  return assocIndexOf(this.__data__, key) > -1;
+}
+
+/**
+ * Sets the list cache `key` to `value`.
+ *
+ * @private
+ * @name set
+ * @memberOf ListCache
+ * @param {string} key The key of the value to set.
+ * @param {*} value The value to set.
+ * @returns {Object} Returns the list cache instance.
+ */
+function listCacheSet(key, value) {
+  var data = this.__data__,
+      index = assocIndexOf(data, key);
+
+  if (index < 0) {
+    data.push([key, value]);
+  } else {
+    data[index][1] = value;
+  }
+  return this;
+}
+
+// Add methods to `ListCache`.
+ListCache.prototype.clear = listCacheClear;
+ListCache.prototype['delete'] = listCacheDelete;
+ListCache.prototype.get = listCacheGet;
+ListCache.prototype.has = listCacheHas;
+ListCache.prototype.set = listCacheSet;
+
+/**
+ * Creates a map cache object to store key-value pairs.
+ *
+ * @private
+ * @constructor
+ * @param {Array} [entries] The key-value pairs to cache.
+ */
+function MapCache(entries) {
+  var index = -1,
+      length = entries ? entries.length : 0;
+
+  this.clear();
+  while (++index < length) {
+    var entry = entries[index];
+    this.set(entry[0], entry[1]);
+  }
+}
+
+/**
+ * Removes all key-value entries from the map.
+ *
+ * @private
+ * @name clear
+ * @memberOf MapCache
+ */
+function mapCacheClear() {
+  this.__data__ = {
+    'hash': new Hash,
+    'map': new (Map || ListCache),
+    'string': new Hash
+  };
+}
+
+/**
+ * Removes `key` and its value from the map.
+ *
+ * @private
+ * @name delete
+ * @memberOf MapCache
+ * @param {string} key The key of the value to remove.
+ * @returns {boolean} Returns `true` if the entry was removed, else `false`.
+ */
+function mapCacheDelete(key) {
+  return getMapData(this, key)['delete'](key);
+}
+
+/**
+ * Gets the map value for `key`.
+ *
+ * @private
+ * @name get
+ * @memberOf MapCache
+ * @param {string} key The key of the value to get.
+ * @returns {*} Returns the entry value.
+ */
+function mapCacheGet(key) {
+  return getMapData(this, key).get(key);
+}
+
+/**
+ * Checks if a map value for `key` exists.
+ *
+ * @private
+ * @name has
+ * @memberOf MapCache
+ * @param {string} key The key of the entry to check.
+ * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
+ */
+function mapCacheHas(key) {
+  return getMapData(this, key).has(key);
+}
+
+/**
+ * Sets the map `key` to `value`.
+ *
+ * @private
+ * @name set
+ * @memberOf MapCache
+ * @param {string} key The key of the value to set.
+ * @param {*} value The value to set.
+ * @returns {Object} Returns the map cache instance.
+ */
+function mapCacheSet(key, value) {
+  getMapData(this, key).set(key, value);
+  return this;
+}
+
+// Add methods to `MapCache`.
+MapCache.prototype.clear = mapCacheClear;
+MapCache.prototype['delete'] = mapCacheDelete;
+MapCache.prototype.get = mapCacheGet;
+MapCache.prototype.has = mapCacheHas;
+MapCache.prototype.set = mapCacheSet;
+
+/**
+ *
+ * Creates an array cache object to store unique values.
+ *
+ * @private
+ * @constructor
+ * @param {Array} [values] The values to cache.
+ */
+function SetCache(values) {
+  var index = -1,
+      length = values ? values.length : 0;
+
+  this.__data__ = new MapCache;
+  while (++index < length) {
+    this.add(values[index]);
+  }
+}
+
+/**
+ * Adds `value` to the array cache.
+ *
+ * @private
+ * @name add
+ * @memberOf SetCache
+ * @alias push
+ * @param {*} value The value to cache.
+ * @returns {Object} Returns the cache instance.
+ */
+function setCacheAdd(value) {
+  this.__data__.set(value, HASH_UNDEFINED);
+  return this;
+}
+
+/**
+ * Checks if `value` is in the array cache.
+ *
+ * @private
+ * @name has
+ * @memberOf SetCache
+ * @param {*} value The value to search for.
+ * @returns {number} Returns `true` if `value` is found, else `false`.
+ */
+function setCacheHas(value) {
+  return this.__data__.has(value);
+}
+
+// Add methods to `SetCache`.
+SetCache.prototype.add = SetCache.prototype.push = setCacheAdd;
+SetCache.prototype.has = setCacheHas;
+
+/**
+ * Gets the index at which the `key` is found in `array` of key-value pairs.
+ *
+ * @private
+ * @param {Array} array The array to inspect.
+ * @param {*} key The key to search for.
+ * @returns {number} Returns the index of the matched value, else `-1`.
+ */
+function assocIndexOf(array, key) {
+  var length = array.length;
+  while (length--) {
+    if (eq(array[length][0], key)) {
+      return length;
+    }
+  }
+  return -1;
+}
+
+/**
+ * The base implementation of `_.isNative` without bad shim checks.
+ *
+ * @private
+ * @param {*} value The value to check.
+ * @returns {boolean} Returns `true` if `value` is a native function,
+ *  else `false`.
+ */
+function baseIsNative(value) {
+  if (!isObject(value) || isMasked(value)) {
+    return false;
+  }
+  var pattern = (isFunction(value) || isHostObject(value)) ? reIsNative : reIsHostCtor;
+  return pattern.test(toSource(value));
+}
+
+/**
+ * The base implementation of `_.uniqBy` without support for iteratee shorthands.
+ *
+ * @private
+ * @param {Array} array The array to inspect.
+ * @param {Function} [iteratee] The iteratee invoked per element.
+ * @param {Function} [comparator] The comparator invoked per element.
+ * @returns {Array} Returns the new duplicate free array.
+ */
+function baseUniq(array, iteratee, comparator) {
+  var index = -1,
+      includes = arrayIncludes,
+      length = array.length,
+      isCommon = true,
+      result = [],
+      seen = result;
+
+  if (comparator) {
+    isCommon = false;
+    includes = arrayIncludesWith;
+  }
+  else if (length >= LARGE_ARRAY_SIZE) {
+    var set = iteratee ? null : createSet(array);
+    if (set) {
+      return setToArray(set);
+    }
+    isCommon = false;
+    includes = cacheHas;
+    seen = new SetCache;
+  }
+  else {
+    seen = iteratee ? [] : result;
+  }
+  outer:
+  while (++index < length) {
+    var value = array[index],
+        computed = iteratee ? iteratee(value) : value;
+
+    value = (comparator || value !== 0) ? value : 0;
+    if (isCommon && computed === computed) {
+      var seenIndex = seen.length;
+      while (seenIndex--) {
+        if (seen[seenIndex] === computed) {
+          continue outer;
+        }
+      }
+      if (iteratee) {
+        seen.push(computed);
+      }
+      result.push(value);
+    }
+    else if (!includes(seen, computed, comparator)) {
+      if (seen !== result) {
+        seen.push(computed);
+      }
+      result.push(value);
+    }
+  }
+  return result;
+}
+
+/**
+ * Creates a set object of `values`.
+ *
+ * @private
+ * @param {Array} values The values to add to the set.
+ * @returns {Object} Returns the new set.
+ */
+var createSet = !(Set && (1 / setToArray(new Set([,-0]))[1]) == INFINITY) ? noop : function(values) {
+  return new Set(values);
+};
+
+/**
+ * Gets the data for `map`.
+ *
+ * @private
+ * @param {Object} map The map to query.
+ * @param {string} key The reference key.
+ * @returns {*} Returns the map data.
+ */
+function getMapData(map, key) {
+  var data = map.__data__;
+  return isKeyable(key)
+    ? data[typeof key == 'string' ? 'string' : 'hash']
+    : data.map;
+}
+
+/**
+ * Gets the native function at `key` of `object`.
+ *
+ * @private
+ * @param {Object} object The object to query.
+ * @param {string} key The key of the method to get.
+ * @returns {*} Returns the function if it's native, else `undefined`.
+ */
+function getNative(object, key) {
+  var value = getValue(object, key);
+  return baseIsNative(value) ? value : undefined;
+}
+
+/**
+ * Checks if `value` is suitable for use as unique object key.
+ *
+ * @private
+ * @param {*} value The value to check.
+ * @returns {boolean} Returns `true` if `value` is suitable, else `false`.
+ */
+function isKeyable(value) {
+  var type = typeof value;
+  return (type == 'string' || type == 'number' || type == 'symbol' || type == 'boolean')
+    ? (value !== '__proto__')
+    : (value === null);
+}
+
+/**
+ * Checks if `func` has its source masked.
+ *
+ * @private
+ * @param {Function} func The function to check.
+ * @returns {boolean} Returns `true` if `func` is masked, else `false`.
+ */
+function isMasked(func) {
+  return !!maskSrcKey && (maskSrcKey in func);
+}
+
+/**
+ * Converts `func` to its source code.
+ *
+ * @private
+ * @param {Function} func The function to process.
+ * @returns {string} Returns the source code.
+ */
+function toSource(func) {
+  if (func != null) {
+    try {
+      return funcToString.call(func);
+    } catch (e) {}
+    try {
+      return (func + '');
+    } catch (e) {}
+  }
+  return '';
+}
+
+/**
+ * Creates a duplicate-free version of an array, using
+ * [`SameValueZero`](http://ecma-international.org/ecma-262/7.0/#sec-samevaluezero)
+ * for equality comparisons, in which only the first occurrence of each
+ * element is kept.
+ *
+ * @static
+ * @memberOf _
+ * @since 0.1.0
+ * @category Array
+ * @param {Array} array The array to inspect.
+ * @returns {Array} Returns the new duplicate free array.
+ * @example
+ *
+ * _.uniq([2, 1, 2]);
+ * // => [2, 1]
+ */
+function uniq(array) {
+  return (array && array.length)
+    ? baseUniq(array)
+    : [];
+}
+
+/**
+ * Performs a
+ * [`SameValueZero`](http://ecma-international.org/ecma-262/7.0/#sec-samevaluezero)
+ * comparison between two values to determine if they are equivalent.
+ *
+ * @static
+ * @memberOf _
+ * @since 4.0.0
+ * @category Lang
+ * @param {*} value The value to compare.
+ * @param {*} other The other value to compare.
+ * @returns {boolean} Returns `true` if the values are equivalent, else `false`.
+ * @example
+ *
+ * var object = { 'a': 1 };
+ * var other = { 'a': 1 };
+ *
+ * _.eq(object, object);
+ * // => true
+ *
+ * _.eq(object, other);
+ * // => false
+ *
+ * _.eq('a', 'a');
+ * // => true
+ *
+ * _.eq('a', Object('a'));
+ * // => false
+ *
+ * _.eq(NaN, NaN);
+ * // => true
+ */
+function eq(value, other) {
+  return value === other || (value !== value && other !== other);
+}
+
+/**
+ * Checks if `value` is classified as a `Function` object.
+ *
+ * @static
+ * @memberOf _
+ * @since 0.1.0
+ * @category Lang
+ * @param {*} value The value to check.
+ * @returns {boolean} Returns `true` if `value` is a function, else `false`.
+ * @example
+ *
+ * _.isFunction(_);
+ * // => true
+ *
+ * _.isFunction(/abc/);
+ * // => false
+ */
+function isFunction(value) {
+  // The use of `Object#toString` avoids issues with the `typeof` operator
+  // in Safari 8-9 which returns 'object' for typed array and other constructors.
+  var tag = isObject(value) ? objectToString.call(value) : '';
+  return tag == funcTag || tag == genTag;
+}
+
+/**
+ * Checks if `value` is the
+ * [language type](http://www.ecma-international.org/ecma-262/7.0/#sec-ecmascript-language-types)
+ * of `Object`. (e.g. arrays, functions, objects, regexes, `new Number(0)`, and `new String('')`)
+ *
+ * @static
+ * @memberOf _
+ * @since 0.1.0
+ * @category Lang
+ * @param {*} value The value to check.
+ * @returns {boolean} Returns `true` if `value` is an object, else `false`.
+ * @example
+ *
+ * _.isObject({});
+ * // => true
+ *
+ * _.isObject([1, 2, 3]);
+ * // => true
+ *
+ * _.isObject(_.noop);
+ * // => true
+ *
+ * _.isObject(null);
+ * // => false
+ */
+function isObject(value) {
+  var type = typeof value;
+  return !!value && (type == 'object' || type == 'function');
+}
+
+/**
+ * This method returns `undefined`.
+ *
+ * @static
+ * @memberOf _
+ * @since 2.3.0
+ * @category Util
+ * @example
+ *
+ * _.times(2, _.noop);
+ * // => [undefined, undefined]
+ */
+function noop() {
+  // No operation performed.
+}
+
+module.exports = uniq;
+
+
+/***/ }),
+
+/***/ 129:
+/***/ (function(module) {
+
+module.exports = require("child_process");
+
+/***/ }),
+
+/***/ 141:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+
+var net = __webpack_require__(631);
+var tls = __webpack_require__(16);
+var http = __webpack_require__(605);
+var https = __webpack_require__(211);
+var events = __webpack_require__(614);
+var assert = __webpack_require__(357);
+var util = __webpack_require__(669);
+
+
+exports.httpOverHttp = httpOverHttp;
+exports.httpsOverHttp = httpsOverHttp;
+exports.httpOverHttps = httpOverHttps;
+exports.httpsOverHttps = httpsOverHttps;
+
+
+function httpOverHttp(options) {
+  var agent = new TunnelingAgent(options);
+  agent.request = http.request;
+  return agent;
+}
+
+function httpsOverHttp(options) {
+  var agent = new TunnelingAgent(options);
+  agent.request = http.request;
+  agent.createSocket = createSecureSocket;
+  agent.defaultPort = 443;
+  return agent;
+}
+
+function httpOverHttps(options) {
+  var agent = new TunnelingAgent(options);
+  agent.request = https.request;
+  return agent;
+}
+
+function httpsOverHttps(options) {
+  var agent = new TunnelingAgent(options);
+  agent.request = https.request;
+  agent.createSocket = createSecureSocket;
+  agent.defaultPort = 443;
+  return agent;
+}
+
+
+function TunnelingAgent(options) {
+  var self = this;
+  self.options = options || {};
+  self.proxyOptions = self.options.proxy || {};
+  self.maxSockets = self.options.maxSockets || http.Agent.defaultMaxSockets;
+  self.requests = [];
+  self.sockets = [];
+
+  self.on('free', function onFree(socket, host, port, localAddress) {
+    var options = toOptions(host, port, localAddress);
+    for (var i = 0, len = self.requests.length; i < len; ++i) {
+      var pending = self.requests[i];
+      if (pending.host === options.host && pending.port === options.port) {
+        // Detect the request to connect same origin server,
+        // reuse the connection.
+        self.requests.splice(i, 1);
+        pending.request.onSocket(socket);
+        return;
+      }
+    }
+    socket.destroy();
+    self.removeSocket(socket);
+  });
+}
+util.inherits(TunnelingAgent, events.EventEmitter);
+
+TunnelingAgent.prototype.addRequest = function addRequest(req, host, port, localAddress) {
+  var self = this;
+  var options = mergeOptions({request: req}, self.options, toOptions(host, port, localAddress));
+
+  if (self.sockets.length >= this.maxSockets) {
+    // We are over limit so we'll add it to the queue.
+    self.requests.push(options);
+    return;
+  }
+
+  // If we are under maxSockets create a new one.
+  self.createSocket(options, function(socket) {
+    socket.on('free', onFree);
+    socket.on('close', onCloseOrRemove);
+    socket.on('agentRemove', onCloseOrRemove);
+    req.onSocket(socket);
+
+    function onFree() {
+      self.emit('free', socket, options);
+    }
+
+    function onCloseOrRemove(err) {
+      self.removeSocket(socket);
+      socket.removeListener('free', onFree);
+      socket.removeListener('close', onCloseOrRemove);
+      socket.removeListener('agentRemove', onCloseOrRemove);
+    }
+  });
+};
+
+TunnelingAgent.prototype.createSocket = function createSocket(options, cb) {
+  var self = this;
+  var placeholder = {};
+  self.sockets.push(placeholder);
+
+  var connectOptions = mergeOptions({}, self.proxyOptions, {
+    method: 'CONNECT',
+    path: options.host + ':' + options.port,
+    agent: false,
+    headers: {
+      host: options.host + ':' + options.port
+    }
+  });
+  if (options.localAddress) {
+    connectOptions.localAddress = options.localAddress;
+  }
+  if (connectOptions.proxyAuth) {
+    connectOptions.headers = connectOptions.headers || {};
+    connectOptions.headers['Proxy-Authorization'] = 'Basic ' +
+        new Buffer(connectOptions.proxyAuth).toString('base64');
+  }
+
+  debug('making CONNECT request');
+  var connectReq = self.request(connectOptions);
+  connectReq.useChunkedEncodingByDefault = false; // for v0.6
+  connectReq.once('response', onResponse); // for v0.6
+  connectReq.once('upgrade', onUpgrade);   // for v0.6
+  connectReq.once('connect', onConnect);   // for v0.7 or later
+  connectReq.once('error', onError);
+  connectReq.end();
+
+  function onResponse(res) {
+    // Very hacky. This is necessary to avoid http-parser leaks.
+    res.upgrade = true;
+  }
+
+  function onUpgrade(res, socket, head) {
+    // Hacky.
+    process.nextTick(function() {
+      onConnect(res, socket, head);
+    });
+  }
+
+  function onConnect(res, socket, head) {
+    connectReq.removeAllListeners();
+    socket.removeAllListeners();
+
+    if (res.statusCode !== 200) {
+      debug('tunneling socket could not be established, statusCode=%d',
+        res.statusCode);
+      socket.destroy();
+      var error = new Error('tunneling socket could not be established, ' +
+        'statusCode=' + res.statusCode);
+      error.code = 'ECONNRESET';
+      options.request.emit('error', error);
+      self.removeSocket(placeholder);
+      return;
+    }
+    if (head.length > 0) {
+      debug('got illegal response body from proxy');
+      socket.destroy();
+      var error = new Error('got illegal response body from proxy');
+      error.code = 'ECONNRESET';
+      options.request.emit('error', error);
+      self.removeSocket(placeholder);
+      return;
+    }
+    debug('tunneling connection has established');
+    self.sockets[self.sockets.indexOf(placeholder)] = socket;
+    return cb(socket);
+  }
+
+  function onError(cause) {
+    connectReq.removeAllListeners();
+
+    debug('tunneling socket could not be established, cause=%s\n',
+          cause.message, cause.stack);
+    var error = new Error('tunneling socket could not be established, ' +
+                          'cause=' + cause.message);
+    error.code = 'ECONNRESET';
+    options.request.emit('error', error);
+    self.removeSocket(placeholder);
+  }
+};
+
+TunnelingAgent.prototype.removeSocket = function removeSocket(socket) {
+  var pos = this.sockets.indexOf(socket)
+  if (pos === -1) {
+    return;
+  }
+  this.sockets.splice(pos, 1);
+
+  var pending = this.requests.shift();
+  if (pending) {
+    // If we have pending requests and a socket gets closed a new one
+    // needs to be created to take over in the pool for the one that closed.
+    this.createSocket(pending, function(socket) {
+      pending.request.onSocket(socket);
+    });
+  }
+};
+
+function createSecureSocket(options, cb) {
+  var self = this;
+  TunnelingAgent.prototype.createSocket.call(self, options, function(socket) {
+    var hostHeader = options.request.getHeader('host');
+    var tlsOptions = mergeOptions({}, self.options, {
+      socket: socket,
+      servername: hostHeader ? hostHeader.replace(/:.*$/, '') : options.host
+    });
+
+    // 0 is dummy port for v0.6
+    var secureSocket = tls.connect(0, tlsOptions);
+    self.sockets[self.sockets.indexOf(socket)] = secureSocket;
+    cb(secureSocket);
+  });
+}
+
+
+function toOptions(host, port, localAddress) {
+  if (typeof host === 'string') { // since v0.10
+    return {
+      host: host,
+      port: port,
+      localAddress: localAddress
+    };
+  }
+  return host; // for v0.11 or later
+}
+
+function mergeOptions(target) {
+  for (var i = 1, len = arguments.length; i < len; ++i) {
+    var overrides = arguments[i];
+    if (typeof overrides === 'object') {
+      var keys = Object.keys(overrides);
+      for (var j = 0, keyLen = keys.length; j < keyLen; ++j) {
+        var k = keys[j];
+        if (overrides[k] !== undefined) {
+          target[k] = overrides[k];
+        }
+      }
+    }
+  }
+  return target;
+}
+
+
+var debug;
+if (process.env.NODE_DEBUG && /\btunnel\b/.test(process.env.NODE_DEBUG)) {
+  debug = function() {
+    var args = Array.prototype.slice.call(arguments);
+    if (typeof args[0] === 'string') {
+      args[0] = 'TUNNEL: ' + args[0];
+    } else {
+      args.unshift('TUNNEL:');
+    }
+    console.error.apply(console, args);
+  }
+} else {
+  debug = function() {};
+}
+exports.debug = debug; // for test
+
+
+/***/ }),
+
+/***/ 143:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+module.exports = withAuthorizationPrefix;
+
+const atob = __webpack_require__(368);
+
+const REGEX_IS_BASIC_AUTH = /^[\w-]+:/;
+
+function withAuthorizationPrefix(authorization) {
+  if (/^(basic|bearer|token) /i.test(authorization)) {
+    return authorization;
+  }
+
+  try {
+    if (REGEX_IS_BASIC_AUTH.test(atob(authorization))) {
+      return `basic ${authorization}`;
+    }
+  } catch (error) {}
+
+  if (authorization.split(/\./).length === 3) {
+    return `bearer ${authorization}`;
+  }
+
+  return `token ${authorization}`;
+}
+
+
+/***/ }),
+
+/***/ 145:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+"use strict";
+
+const pump = __webpack_require__(453);
+const bufferStream = __webpack_require__(966);
+
+class MaxBufferError extends Error {
+	constructor() {
+		super('maxBuffer exceeded');
+		this.name = 'MaxBufferError';
+	}
+}
+
+function getStream(inputStream, options) {
+	if (!inputStream) {
+		return Promise.reject(new Error('Expected a stream'));
+	}
+
+	options = Object.assign({maxBuffer: Infinity}, options);
+
+	const {maxBuffer} = options;
+
+	let stream;
+	return new Promise((resolve, reject) => {
+		const rejectPromise = error => {
+			if (error) { // A null check
+				error.bufferedData = stream.getBufferedValue();
+			}
+			reject(error);
+		};
+
+		stream = pump(inputStream, bufferStream(options), error => {
+			if (error) {
+				rejectPromise(error);
+				return;
+			}
+
+			resolve();
+		});
+
+		stream.on('data', () => {
+			if (stream.getBufferedLength() > maxBuffer) {
+				rejectPromise(new MaxBufferError());
+			}
+		});
+	}).then(() => stream.getBufferedValue());
+}
+
+module.exports = getStream;
+module.exports.buffer = (stream, options) => getStream(stream, Object.assign({}, options, {encoding: 'buffer'}));
+module.exports.array = (stream, options) => getStream(stream, Object.assign({}, options, {array: true}));
+module.exports.MaxBufferError = MaxBufferError;
+
+
+/***/ }),
+
+/***/ 148:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+module.exports = paginatePlugin;
+
+const { paginateRest } = __webpack_require__(299);
+
+function paginatePlugin(octokit) {
+  Object.assign(octokit, paginateRest(octokit));
+}
+
+
+/***/ }),
+
+/***/ 168:
+/***/ (function(module) {
+
+"use strict";
+
+const alias = ['stdin', 'stdout', 'stderr'];
+
+const hasAlias = opts => alias.some(x => Boolean(opts[x]));
+
+module.exports = opts => {
+	if (!opts) {
+		return null;
+	}
+
+	if (opts.stdio && hasAlias(opts)) {
+		throw new Error(`It's not possible to provide \`stdio\` in combination with one of ${alias.map(x => `\`${x}\``).join(', ')}`);
+	}
+
+	if (typeof opts.stdio === 'string') {
+		return opts.stdio;
+	}
+
+	const stdio = opts.stdio || [];
+
+	if (!Array.isArray(stdio)) {
+		throw new TypeError(`Expected \`stdio\` to be of type \`string\` or \`Array\`, got \`${typeof stdio}\``);
+	}
+
+	const result = [];
+	const len = Math.max(stdio.length, alias.length);
+
+	for (let i = 0; i < len; i++) {
+		let value = null;
+
+		if (stdio[i] !== undefined) {
+			value = stdio[i];
+		} else if (opts[alias[i]] !== undefined) {
+			value = opts[alias[i]];
+		}
+
+		result[i] = value;
+	}
+
+	return result;
+};
+
+
+/***/ }),
+
+/***/ 190:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+module.exports = authenticationPlugin;
+
+const { createTokenAuth } = __webpack_require__(813);
+const { Deprecation } = __webpack_require__(692);
+const once = __webpack_require__(969);
+
+const beforeRequest = __webpack_require__(863);
+const requestError = __webpack_require__(293);
+const validate = __webpack_require__(954);
+const withAuthorizationPrefix = __webpack_require__(143);
+
+const deprecateAuthBasic = once((log, deprecation) => log.warn(deprecation));
+const deprecateAuthObject = once((log, deprecation) => log.warn(deprecation));
+
+function authenticationPlugin(octokit, options) {
+  // If `options.authStrategy` is set then use it and pass in `options.auth`
+  if (options.authStrategy) {
+    const auth = options.authStrategy(options.auth);
+    octokit.hook.wrap("request", auth.hook);
+    octokit.auth = auth;
+    return;
+  }
+
+  // If neither `options.authStrategy` nor `options.auth` are set, the `octokit` instance
+  // is unauthenticated. The `octokit.auth()` method is a no-op and no request hook is registred.
+  if (!options.auth) {
+    octokit.auth = () =>
+      Promise.resolve({
+        type: "unauthenticated"
+      });
+    return;
+  }
+
+  const isBasicAuthString =
+    typeof options.auth === "string" &&
+    /^basic/.test(withAuthorizationPrefix(options.auth));
+
+  // If only `options.auth` is set to a string, use the default token authentication strategy.
+  if (typeof options.auth === "string" && !isBasicAuthString) {
+    const auth = createTokenAuth(options.auth);
+    octokit.hook.wrap("request", auth.hook);
+    octokit.auth = auth;
+    return;
+  }
+
+  // Otherwise log a deprecation message
+  const [deprecationMethod, deprecationMessapge] = isBasicAuthString
+    ? [
+        deprecateAuthBasic,
+        'Setting the "new Octokit({ auth })" option to a Basic Auth string is deprecated. Use https://github.com/octokit/auth-basic.js instead. See (https://octokit.github.io/rest.js/#authentication)'
+      ]
+    : [
+        deprecateAuthObject,
+        'Setting the "new Octokit({ auth })" option to an object without also setting the "authStrategy" option is deprecated and will be removed in v17. See (https://octokit.github.io/rest.js/#authentication)'
+      ];
+  deprecationMethod(
+    octokit.log,
+    new Deprecation("[@octokit/rest] " + deprecationMessapge)
+  );
+
+  octokit.auth = () =>
+    Promise.resolve({
+      type: "deprecated",
+      message: deprecationMessapge
+    });
+
+  validate(options.auth);
+
+  const state = {
+    octokit,
+    auth: options.auth
+  };
+
+  octokit.hook.before("request", beforeRequest.bind(null, state));
+  octokit.hook.error("request", requestError.bind(null, state));
+}
+
+
+/***/ }),
+
+/***/ 197:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+module.exports = isexe
+isexe.sync = sync
+
+var fs = __webpack_require__(747)
+
+function isexe (path, options, cb) {
+  fs.stat(path, function (er, stat) {
+    cb(er, er ? false : checkStat(stat, options))
+  })
+}
+
+function sync (path, options) {
+  return checkStat(fs.statSync(path), options)
+}
+
+function checkStat (stat, options) {
+  return stat.isFile() && checkMode(stat, options)
+}
+
+function checkMode (stat, options) {
+  var mod = stat.mode
+  var uid = stat.uid
+  var gid = stat.gid
+
+  var myUid = options.uid !== undefined ?
+    options.uid : process.getuid && process.getuid()
+  var myGid = options.gid !== undefined ?
+    options.gid : process.getgid && process.getgid()
+
+  var u = parseInt('100', 8)
+  var g = parseInt('010', 8)
+  var o = parseInt('001', 8)
+  var ug = u | g
+
+  var ret = (mod & o) ||
+    (mod & g) && gid === myGid ||
+    (mod & u) && uid === myUid ||
+    (mod & ug) && myUid === 0
+
+  return ret
+}
+
+
+/***/ }),
+
+/***/ 211:
+/***/ (function(module) {
+
+module.exports = require("https");
+
+/***/ }),
+
+/***/ 215:
+/***/ (function(module) {
+
+module.exports = {"name":"@octokit/rest","version":"16.43.1","publishConfig":{"access":"public"},"description":"GitHub REST API client for Node.js","keywords":["octokit","github","rest","api-client"],"author":"Gregor Martynus (https://github.com/gr2m)","contributors":[{"name":"Mike de Boer","email":"info@mikedeboer.nl"},{"name":"Fabian Jakobs","email":"fabian@c9.io"},{"name":"Joe Gallo","email":"joe@brassafrax.com"},{"name":"Gregor Martynus","url":"https://github.com/gr2m"}],"repository":"https://github.com/octokit/rest.js","dependencies":{"@octokit/auth-token":"^2.4.0","@octokit/plugin-paginate-rest":"^1.1.1","@octokit/plugin-request-log":"^1.0.0","@octokit/plugin-rest-endpoint-methods":"2.4.0","@octokit/request":"^5.2.0","@octokit/request-error":"^1.0.2","atob-lite":"^2.0.0","before-after-hook":"^2.0.0","btoa-lite":"^1.0.0","deprecation":"^2.0.0","lodash.get":"^4.4.2","lodash.set":"^4.3.2","lodash.uniq":"^4.5.0","octokit-pagination-methods":"^1.1.0","once":"^1.4.0","universal-user-agent":"^4.0.0"},"devDependencies":{"@gimenete/type-writer":"^0.1.3","@octokit/auth":"^1.1.1","@octokit/fixtures-server":"^5.0.6","@octokit/graphql":"^4.2.0","@types/node":"^13.1.0","bundlesize":"^0.18.0","chai":"^4.1.2","compression-webpack-plugin":"^3.1.0","cypress":"^3.0.0","glob":"^7.1.2","http-proxy-agent":"^4.0.0","lodash.camelcase":"^4.3.0","lodash.merge":"^4.6.1","lodash.upperfirst":"^4.3.1","lolex":"^5.1.2","mkdirp":"^1.0.0","mocha":"^7.0.1","mustache":"^4.0.0","nock":"^11.3.3","npm-run-all":"^4.1.2","nyc":"^15.0.0","prettier":"^1.14.2","proxy":"^1.0.0","semantic-release":"^17.0.0","sinon":"^8.0.0","sinon-chai":"^3.0.0","sort-keys":"^4.0.0","string-to-arraybuffer":"^1.0.0","string-to-jsdoc-comment":"^1.0.0","typescript":"^3.3.1","webpack":"^4.0.0","webpack-bundle-analyzer":"^3.0.0","webpack-cli":"^3.0.0"},"types":"index.d.ts","scripts":{"coverage":"nyc report --reporter=html && open coverage/index.html","lint":"prettier --check '{lib,plugins,scripts,test}/**/*.{js,json,ts}' 'docs/*.{js,json}' 'docs/src/**/*' index.js README.md package.json","lint:fix":"prettier --write '{lib,plugins,scripts,test}/**/*.{js,json,ts}' 'docs/*.{js,json}' 'docs/src/**/*' index.js README.md package.json","pretest":"npm run -s lint","test":"nyc mocha test/mocha-node-setup.js \"test/*/**/*-test.js\"","test:browser":"cypress run --browser chrome","build":"npm-run-all build:*","build:ts":"npm run -s update-endpoints:typescript","prebuild:browser":"mkdirp dist/","build:browser":"npm-run-all build:browser:*","build:browser:development":"webpack --mode development --entry . --output-library=Octokit --output=./dist/octokit-rest.js --profile --json > dist/bundle-stats.json","build:browser:production":"webpack --mode production --entry . --plugin=compression-webpack-plugin --output-library=Octokit --output-path=./dist --output-filename=octokit-rest.min.js --devtool source-map","generate-bundle-report":"webpack-bundle-analyzer dist/bundle-stats.json --mode=static --no-open --report dist/bundle-report.html","update-endpoints":"npm-run-all update-endpoints:*","update-endpoints:fetch-json":"node scripts/update-endpoints/fetch-json","update-endpoints:typescript":"node scripts/update-endpoints/typescript","prevalidate:ts":"npm run -s build:ts","validate:ts":"tsc --target es6 --noImplicitAny index.d.ts","postvalidate:ts":"tsc --noEmit --target es6 test/typescript-validate.ts","start-fixtures-server":"octokit-fixtures-server"},"license":"MIT","files":["index.js","index.d.ts","lib","plugins"],"nyc":{"ignore":["test"]},"release":{"publish":["@semantic-release/npm",{"path":"@semantic-release/github","assets":["dist/*","!dist/*.map.gz"]}]},"bundlesize":[{"path":"./dist/octokit-rest.min.js.gz","maxSize":"33 kB"}]};
+
+/***/ }),
+
+/***/ 260:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+// Note: since nyc uses this module to output coverage, any lines
+// that are in the direct sync flow of nyc's outputCoverage are
+// ignored, since we can never get coverage for them.
+var assert = __webpack_require__(357)
+var signals = __webpack_require__(654)
+
+var EE = __webpack_require__(614)
+/* istanbul ignore if */
+if (typeof EE !== 'function') {
+  EE = EE.EventEmitter
+}
+
+var emitter
+if (process.__signal_exit_emitter__) {
+  emitter = process.__signal_exit_emitter__
+} else {
+  emitter = process.__signal_exit_emitter__ = new EE()
+  emitter.count = 0
+  emitter.emitted = {}
+}
+
+// Because this emitter is a global, we have to check to see if a
+// previous version of this library failed to enable infinite listeners.
+// I know what you're about to say.  But literally everything about
+// signal-exit is a compromise with evil.  Get used to it.
+if (!emitter.infinite) {
+  emitter.setMaxListeners(Infinity)
+  emitter.infinite = true
+}
+
+module.exports = function (cb, opts) {
+  assert.equal(typeof cb, 'function', 'a callback must be provided for exit handler')
+
+  if (loaded === false) {
+    load()
+  }
+
+  var ev = 'exit'
+  if (opts && opts.alwaysLast) {
+    ev = 'afterexit'
+  }
+
+  var remove = function () {
+    emitter.removeListener(ev, cb)
+    if (emitter.listeners('exit').length === 0 &&
+        emitter.listeners('afterexit').length === 0) {
+      unload()
+    }
+  }
+  emitter.on(ev, cb)
+
+  return remove
+}
+
+module.exports.unload = unload
+function unload () {
+  if (!loaded) {
+    return
+  }
+  loaded = false
+
+  signals.forEach(function (sig) {
+    try {
+      process.removeListener(sig, sigListeners[sig])
+    } catch (er) {}
+  })
+  process.emit = originalProcessEmit
+  process.reallyExit = originalProcessReallyExit
+  emitter.count -= 1
+}
+
+function emit (event, code, signal) {
+  if (emitter.emitted[event]) {
+    return
+  }
+  emitter.emitted[event] = true
+  emitter.emit(event, code, signal)
+}
+
+// { <signal>: <listener fn>, ... }
+var sigListeners = {}
+signals.forEach(function (sig) {
+  sigListeners[sig] = function listener () {
+    // If there are no other listeners, an exit is coming!
+    // Simplest way: remove us and then re-send the signal.
+    // We know that this will kill the process, so we can
+    // safely emit now.
+    var listeners = process.listeners(sig)
+    if (listeners.length === emitter.count) {
+      unload()
+      emit('exit', null, sig)
+      /* istanbul ignore next */
+      emit('afterexit', null, sig)
+      /* istanbul ignore next */
+      process.kill(process.pid, sig)
+    }
+  }
+})
+
+module.exports.signals = function () {
+  return signals
+}
+
+module.exports.load = load
+
+var loaded = false
+
+function load () {
+  if (loaded) {
+    return
+  }
+  loaded = true
+
+  // This is the number of onSignalExit's that are in play.
+  // It's important so that we can count the correct number of
+  // listeners on signals, and don't wait for the other one to
+  // handle it instead of us.
+  emitter.count += 1
+
+  signals = signals.filter(function (sig) {
+    try {
+      process.on(sig, sigListeners[sig])
+      return true
+    } catch (er) {
+      return false
+    }
+  })
+
+  process.emit = processEmit
+  process.reallyExit = processReallyExit
+}
+
+var originalProcessReallyExit = process.reallyExit
+function processReallyExit (code) {
+  process.exitCode = code || 0
+  emit('exit', process.exitCode, null)
+  /* istanbul ignore next */
+  emit('afterexit', process.exitCode, null)
+  /* istanbul ignore next */
+  originalProcessReallyExit.call(process, process.exitCode)
+}
+
+var originalProcessEmit = process.emit
+function processEmit (ev, arg) {
+  if (ev === 'exit') {
+    if (arg !== undefined) {
+      process.exitCode = arg
+    }
+    var ret = originalProcessEmit.apply(this, arguments)
+    emit('exit', process.exitCode, null)
+    /* istanbul ignore next */
+    emit('afterexit', process.exitCode, null)
+    return ret
+  } else {
+    return originalProcessEmit.apply(this, arguments)
+  }
+}
+
+
+/***/ }),
+
+/***/ 262:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", { value: true });
+const fs_1 = __webpack_require__(747);
+const os_1 = __webpack_require__(87);
+class Context {
+    /**
+     * Hydrate the context from the environment
+     */
+    constructor() {
+        this.payload = {};
+        if (process.env.GITHUB_EVENT_PATH) {
+            if (fs_1.existsSync(process.env.GITHUB_EVENT_PATH)) {
+                this.payload = JSON.parse(fs_1.readFileSync(process.env.GITHUB_EVENT_PATH, { encoding: 'utf8' }));
+            }
+            else {
+                const path = process.env.GITHUB_EVENT_PATH;
+                process.stdout.write(`GITHUB_EVENT_PATH ${path} does not exist${os_1.EOL}`);
+            }
+        }
+        this.eventName = process.env.GITHUB_EVENT_NAME;
+        this.sha = process.env.GITHUB_SHA;
+        this.ref = process.env.GITHUB_REF;
+        this.workflow = process.env.GITHUB_WORKFLOW;
+        this.action = process.env.GITHUB_ACTION;
+        this.actor = process.env.GITHUB_ACTOR;
+    }
+    get issue() {
+        const payload = this.payload;
+        return Object.assign(Object.assign({}, this.repo), { number: (payload.issue || payload.pull_request || payload).number });
+    }
+    get repo() {
+        if (process.env.GITHUB_REPOSITORY) {
+            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+            return { owner, repo };
+        }
+        if (this.payload.repository) {
+            return {
+                owner: this.payload.repository.owner.login,
+                repo: this.payload.repository.name
+            };
+        }
+        throw new Error("context.repo requires a GITHUB_REPOSITORY environment variable like 'owner/repo'");
+    }
+}
+exports.Context = Context;
+//# sourceMappingURL=context.js.map
+
+/***/ }),
+
+/***/ 265:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+module.exports = getPage
+
+const deprecate = __webpack_require__(370)
+const getPageLinks = __webpack_require__(577)
+const HttpError = __webpack_require__(297)
+
+function getPage (octokit, link, which, headers) {
+  deprecate(`octokit.get${which.charAt(0).toUpperCase() + which.slice(1)}Page() – You can use octokit.paginate or async iterators instead: https://github.com/octokit/rest.js#pagination.`)
+  const url = getPageLinks(link)[which]
+
+  if (!url) {
+    const urlError = new HttpError(`No ${which} page found`, 404)
+    return Promise.reject(urlError)
+  }
+
+  const requestOptions = {
+    url,
+    headers: applyAcceptHeader(link, headers)
+  }
+
+  const promise = octokit.request(requestOptions)
+
+  return promise
+}
+
+function applyAcceptHeader (res, headers) {
+  const previous = res.headers && res.headers['x-github-media-type']
+
+  if (!previous || (headers && headers.accept)) {
+    return headers
+  }
+  headers = headers || {}
+  headers.accept = 'application/vnd.' + previous
+    .replace('; param=', '.')
+    .replace('; format=', '+')
+
+  return headers
+}
+
+
+/***/ }),
+
+/***/ 280:
 /***/ (function(module, exports) {
 
 exports = module.exports = SemVer
@@ -1879,1693 +3841,6 @@ function coerce (version) {
 
 /***/ }),
 
-/***/ 49:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-"use strict";
-
-const os = __webpack_require__(87);
-const execa = __webpack_require__(955);
-
-// Reference: https://www.gaijin.at/en/lstwinver.php
-const names = new Map([
-	['10.0', '10'],
-	['6.3', '8.1'],
-	['6.2', '8'],
-	['6.1', '7'],
-	['6.0', 'Vista'],
-	['5.2', 'Server 2003'],
-	['5.1', 'XP'],
-	['5.0', '2000'],
-	['4.9', 'ME'],
-	['4.1', '98'],
-	['4.0', '95']
-]);
-
-const windowsRelease = release => {
-	const version = /\d+\.\d/.exec(release || os.release());
-
-	if (release && !version) {
-		throw new Error('`release` argument doesn\'t match `n.n`');
-	}
-
-	const ver = (version || [])[0];
-
-	// Server 2008, 2012 and 2016 versions are ambiguous with desktop versions and must be detected at runtime.
-	// If `release` is omitted or we're on a Windows system, and the version number is an ambiguous version
-	// then use `wmic` to get the OS caption: https://msdn.microsoft.com/en-us/library/aa394531(v=vs.85).aspx
-	// If the resulting caption contains the year 2008, 2012 or 2016, it is a server version, so return a server OS name.
-	if ((!release || release === os.release()) && ['6.1', '6.2', '6.3', '10.0'].includes(ver)) {
-		const stdout = execa.sync('wmic', ['os', 'get', 'Caption']).stdout || '';
-		const year = (stdout.match(/2008|2012|2016/) || [])[0];
-		if (year) {
-			return `Server ${year}`;
-		}
-	}
-
-	return names.get(ver);
-};
-
-module.exports = windowsRelease;
-
-
-/***/ }),
-
-/***/ 87:
-/***/ (function(module) {
-
-module.exports = require("os");
-
-/***/ }),
-
-/***/ 104:
-/***/ (function(__unusedmodule, __unusedexports, __webpack_require__) {
-
-const fs = __webpack_require__(747)
-const core = __webpack_require__(470)
-const { GitHub, context } = __webpack_require__(469)
-
-async function main() {
-  const n = parseInt(core.getInput('n'))
-  if (n < 1) {
-    throw new Error(`input n should be >= 1 (was ${n})`)
-  }
-
-  const dryRun = core.getInput('dry_run') === 'true'
-
-  const lastTagFile = core.getInput('last_tag_file')
-
-  const github = new GitHub(process.env.GITHUB_TOKEN)
-  const { owner, repo } = context.repo
-
-  let { data: releases } = await github.repos.listReleases({ owner, repo })
-
-  // Ignore draft releases
-  releases = releases.filter(release => !release.draft)
-
-  // Sort by older to newest
-  releases.sort((a, b) => Date.parse(a.published_at) <= Date.parse(b.published_at) ? -1 : 1)
-
-  console.log(`All ${releases.length} releases (oldest to newest):`)
-  for (const release of releases) {
-    console.log(formatRelease(release))
-  }
-
-  let toDelete
-  if (releases.length <= n) {
-    console.log(`Only ${releases.length} releases left (<= n=${n}), not deleting any`)
-    toDelete = []
-  } else {
-    toDelete = releases.slice(0, releases.length - n)
-  }
-
-  if (lastTagFile !== '') {
-    const lastTag = fs.readFileSync(lastTagFile, 'utf8').trim()
-    console.log(`Keeping release with tag ${lastTag}`)
-    toDelete = toDelete.filter(release => release.tag_name !== lastTag)
-  }
-
-  console.log('Kept releases:')
-  for (const release of releases.filter(release => !toDelete.includes(release))) {
-    console.log(formatRelease(release))
-  }
-
-  console.log(`${toDelete.length} releases to be deleted:`)
-  for (const release of toDelete) {
-    if (dryRun) {
-      console.log(`Would delete ${formatRelease(release)}`)
-    } else {
-      console.log(`Deleting ${formatRelease(release)}`)
-      await github.repos.deleteRelease({ owner, repo, release_id: release.id })
-
-      const tag = release.tag_name
-      console.log(`Deleting tag ${tag}`)
-      await github.git.deleteRef({ owner, repo, ref: `tags/${tag}` })
-    }
-  }
-
-  console.log('Done')
-}
-
-function formatRelease(release) {
-  return `Release published at ${release.published_at}, tag: ${release.tag_name}`
-}
-
-async function run() {
-  try {
-    await main()
-  } catch (error) {
-    core.setFailed(error.message)
-  }
-}
-
-run()
-
-
-/***/ }),
-
-/***/ 118:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-"use strict";
-
-const os = __webpack_require__(87);
-
-const nameMap = new Map([
-	[19, 'Catalina'],
-	[18, 'Mojave'],
-	[17, 'High Sierra'],
-	[16, 'Sierra'],
-	[15, 'El Capitan'],
-	[14, 'Yosemite'],
-	[13, 'Mavericks'],
-	[12, 'Mountain Lion'],
-	[11, 'Lion'],
-	[10, 'Snow Leopard'],
-	[9, 'Leopard'],
-	[8, 'Tiger'],
-	[7, 'Panther'],
-	[6, 'Jaguar'],
-	[5, 'Puma']
-]);
-
-const macosRelease = release => {
-	release = Number((release || os.release()).split('.')[0]);
-	return {
-		name: nameMap.get(release),
-		version: '10.' + (release - 4)
-	};
-};
-
-module.exports = macosRelease;
-// TODO: remove this in the next major version
-module.exports.default = macosRelease;
-
-
-/***/ }),
-
-/***/ 126:
-/***/ (function(module) {
-
-/**
- * lodash (Custom Build) <https://lodash.com/>
- * Build: `lodash modularize exports="npm" -o ./`
- * Copyright jQuery Foundation and other contributors <https://jquery.org/>
- * Released under MIT license <https://lodash.com/license>
- * Based on Underscore.js 1.8.3 <http://underscorejs.org/LICENSE>
- * Copyright Jeremy Ashkenas, DocumentCloud and Investigative Reporters & Editors
- */
-
-/** Used as the size to enable large array optimizations. */
-var LARGE_ARRAY_SIZE = 200;
-
-/** Used to stand-in for `undefined` hash values. */
-var HASH_UNDEFINED = '__lodash_hash_undefined__';
-
-/** Used as references for various `Number` constants. */
-var INFINITY = 1 / 0;
-
-/** `Object#toString` result references. */
-var funcTag = '[object Function]',
-    genTag = '[object GeneratorFunction]';
-
-/**
- * Used to match `RegExp`
- * [syntax characters](http://ecma-international.org/ecma-262/7.0/#sec-patterns).
- */
-var reRegExpChar = /[\\^$.*+?()[\]{}|]/g;
-
-/** Used to detect host constructors (Safari). */
-var reIsHostCtor = /^\[object .+?Constructor\]$/;
-
-/** Detect free variable `global` from Node.js. */
-var freeGlobal = typeof global == 'object' && global && global.Object === Object && global;
-
-/** Detect free variable `self`. */
-var freeSelf = typeof self == 'object' && self && self.Object === Object && self;
-
-/** Used as a reference to the global object. */
-var root = freeGlobal || freeSelf || Function('return this')();
-
-/**
- * A specialized version of `_.includes` for arrays without support for
- * specifying an index to search from.
- *
- * @private
- * @param {Array} [array] The array to inspect.
- * @param {*} target The value to search for.
- * @returns {boolean} Returns `true` if `target` is found, else `false`.
- */
-function arrayIncludes(array, value) {
-  var length = array ? array.length : 0;
-  return !!length && baseIndexOf(array, value, 0) > -1;
-}
-
-/**
- * This function is like `arrayIncludes` except that it accepts a comparator.
- *
- * @private
- * @param {Array} [array] The array to inspect.
- * @param {*} target The value to search for.
- * @param {Function} comparator The comparator invoked per element.
- * @returns {boolean} Returns `true` if `target` is found, else `false`.
- */
-function arrayIncludesWith(array, value, comparator) {
-  var index = -1,
-      length = array ? array.length : 0;
-
-  while (++index < length) {
-    if (comparator(value, array[index])) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * The base implementation of `_.findIndex` and `_.findLastIndex` without
- * support for iteratee shorthands.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {Function} predicate The function invoked per iteration.
- * @param {number} fromIndex The index to search from.
- * @param {boolean} [fromRight] Specify iterating from right to left.
- * @returns {number} Returns the index of the matched value, else `-1`.
- */
-function baseFindIndex(array, predicate, fromIndex, fromRight) {
-  var length = array.length,
-      index = fromIndex + (fromRight ? 1 : -1);
-
-  while ((fromRight ? index-- : ++index < length)) {
-    if (predicate(array[index], index, array)) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-/**
- * The base implementation of `_.indexOf` without `fromIndex` bounds checks.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {*} value The value to search for.
- * @param {number} fromIndex The index to search from.
- * @returns {number} Returns the index of the matched value, else `-1`.
- */
-function baseIndexOf(array, value, fromIndex) {
-  if (value !== value) {
-    return baseFindIndex(array, baseIsNaN, fromIndex);
-  }
-  var index = fromIndex - 1,
-      length = array.length;
-
-  while (++index < length) {
-    if (array[index] === value) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-/**
- * The base implementation of `_.isNaN` without support for number objects.
- *
- * @private
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is `NaN`, else `false`.
- */
-function baseIsNaN(value) {
-  return value !== value;
-}
-
-/**
- * Checks if a cache value for `key` exists.
- *
- * @private
- * @param {Object} cache The cache to query.
- * @param {string} key The key of the entry to check.
- * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
- */
-function cacheHas(cache, key) {
-  return cache.has(key);
-}
-
-/**
- * Gets the value at `key` of `object`.
- *
- * @private
- * @param {Object} [object] The object to query.
- * @param {string} key The key of the property to get.
- * @returns {*} Returns the property value.
- */
-function getValue(object, key) {
-  return object == null ? undefined : object[key];
-}
-
-/**
- * Checks if `value` is a host object in IE < 9.
- *
- * @private
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is a host object, else `false`.
- */
-function isHostObject(value) {
-  // Many host objects are `Object` objects that can coerce to strings
-  // despite having improperly defined `toString` methods.
-  var result = false;
-  if (value != null && typeof value.toString != 'function') {
-    try {
-      result = !!(value + '');
-    } catch (e) {}
-  }
-  return result;
-}
-
-/**
- * Converts `set` to an array of its values.
- *
- * @private
- * @param {Object} set The set to convert.
- * @returns {Array} Returns the values.
- */
-function setToArray(set) {
-  var index = -1,
-      result = Array(set.size);
-
-  set.forEach(function(value) {
-    result[++index] = value;
-  });
-  return result;
-}
-
-/** Used for built-in method references. */
-var arrayProto = Array.prototype,
-    funcProto = Function.prototype,
-    objectProto = Object.prototype;
-
-/** Used to detect overreaching core-js shims. */
-var coreJsData = root['__core-js_shared__'];
-
-/** Used to detect methods masquerading as native. */
-var maskSrcKey = (function() {
-  var uid = /[^.]+$/.exec(coreJsData && coreJsData.keys && coreJsData.keys.IE_PROTO || '');
-  return uid ? ('Symbol(src)_1.' + uid) : '';
-}());
-
-/** Used to resolve the decompiled source of functions. */
-var funcToString = funcProto.toString;
-
-/** Used to check objects for own properties. */
-var hasOwnProperty = objectProto.hasOwnProperty;
-
-/**
- * Used to resolve the
- * [`toStringTag`](http://ecma-international.org/ecma-262/7.0/#sec-object.prototype.tostring)
- * of values.
- */
-var objectToString = objectProto.toString;
-
-/** Used to detect if a method is native. */
-var reIsNative = RegExp('^' +
-  funcToString.call(hasOwnProperty).replace(reRegExpChar, '\\$&')
-  .replace(/hasOwnProperty|(function).*?(?=\\\()| for .+?(?=\\\])/g, '$1.*?') + '$'
-);
-
-/** Built-in value references. */
-var splice = arrayProto.splice;
-
-/* Built-in method references that are verified to be native. */
-var Map = getNative(root, 'Map'),
-    Set = getNative(root, 'Set'),
-    nativeCreate = getNative(Object, 'create');
-
-/**
- * Creates a hash object.
- *
- * @private
- * @constructor
- * @param {Array} [entries] The key-value pairs to cache.
- */
-function Hash(entries) {
-  var index = -1,
-      length = entries ? entries.length : 0;
-
-  this.clear();
-  while (++index < length) {
-    var entry = entries[index];
-    this.set(entry[0], entry[1]);
-  }
-}
-
-/**
- * Removes all key-value entries from the hash.
- *
- * @private
- * @name clear
- * @memberOf Hash
- */
-function hashClear() {
-  this.__data__ = nativeCreate ? nativeCreate(null) : {};
-}
-
-/**
- * Removes `key` and its value from the hash.
- *
- * @private
- * @name delete
- * @memberOf Hash
- * @param {Object} hash The hash to modify.
- * @param {string} key The key of the value to remove.
- * @returns {boolean} Returns `true` if the entry was removed, else `false`.
- */
-function hashDelete(key) {
-  return this.has(key) && delete this.__data__[key];
-}
-
-/**
- * Gets the hash value for `key`.
- *
- * @private
- * @name get
- * @memberOf Hash
- * @param {string} key The key of the value to get.
- * @returns {*} Returns the entry value.
- */
-function hashGet(key) {
-  var data = this.__data__;
-  if (nativeCreate) {
-    var result = data[key];
-    return result === HASH_UNDEFINED ? undefined : result;
-  }
-  return hasOwnProperty.call(data, key) ? data[key] : undefined;
-}
-
-/**
- * Checks if a hash value for `key` exists.
- *
- * @private
- * @name has
- * @memberOf Hash
- * @param {string} key The key of the entry to check.
- * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
- */
-function hashHas(key) {
-  var data = this.__data__;
-  return nativeCreate ? data[key] !== undefined : hasOwnProperty.call(data, key);
-}
-
-/**
- * Sets the hash `key` to `value`.
- *
- * @private
- * @name set
- * @memberOf Hash
- * @param {string} key The key of the value to set.
- * @param {*} value The value to set.
- * @returns {Object} Returns the hash instance.
- */
-function hashSet(key, value) {
-  var data = this.__data__;
-  data[key] = (nativeCreate && value === undefined) ? HASH_UNDEFINED : value;
-  return this;
-}
-
-// Add methods to `Hash`.
-Hash.prototype.clear = hashClear;
-Hash.prototype['delete'] = hashDelete;
-Hash.prototype.get = hashGet;
-Hash.prototype.has = hashHas;
-Hash.prototype.set = hashSet;
-
-/**
- * Creates an list cache object.
- *
- * @private
- * @constructor
- * @param {Array} [entries] The key-value pairs to cache.
- */
-function ListCache(entries) {
-  var index = -1,
-      length = entries ? entries.length : 0;
-
-  this.clear();
-  while (++index < length) {
-    var entry = entries[index];
-    this.set(entry[0], entry[1]);
-  }
-}
-
-/**
- * Removes all key-value entries from the list cache.
- *
- * @private
- * @name clear
- * @memberOf ListCache
- */
-function listCacheClear() {
-  this.__data__ = [];
-}
-
-/**
- * Removes `key` and its value from the list cache.
- *
- * @private
- * @name delete
- * @memberOf ListCache
- * @param {string} key The key of the value to remove.
- * @returns {boolean} Returns `true` if the entry was removed, else `false`.
- */
-function listCacheDelete(key) {
-  var data = this.__data__,
-      index = assocIndexOf(data, key);
-
-  if (index < 0) {
-    return false;
-  }
-  var lastIndex = data.length - 1;
-  if (index == lastIndex) {
-    data.pop();
-  } else {
-    splice.call(data, index, 1);
-  }
-  return true;
-}
-
-/**
- * Gets the list cache value for `key`.
- *
- * @private
- * @name get
- * @memberOf ListCache
- * @param {string} key The key of the value to get.
- * @returns {*} Returns the entry value.
- */
-function listCacheGet(key) {
-  var data = this.__data__,
-      index = assocIndexOf(data, key);
-
-  return index < 0 ? undefined : data[index][1];
-}
-
-/**
- * Checks if a list cache value for `key` exists.
- *
- * @private
- * @name has
- * @memberOf ListCache
- * @param {string} key The key of the entry to check.
- * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
- */
-function listCacheHas(key) {
-  return assocIndexOf(this.__data__, key) > -1;
-}
-
-/**
- * Sets the list cache `key` to `value`.
- *
- * @private
- * @name set
- * @memberOf ListCache
- * @param {string} key The key of the value to set.
- * @param {*} value The value to set.
- * @returns {Object} Returns the list cache instance.
- */
-function listCacheSet(key, value) {
-  var data = this.__data__,
-      index = assocIndexOf(data, key);
-
-  if (index < 0) {
-    data.push([key, value]);
-  } else {
-    data[index][1] = value;
-  }
-  return this;
-}
-
-// Add methods to `ListCache`.
-ListCache.prototype.clear = listCacheClear;
-ListCache.prototype['delete'] = listCacheDelete;
-ListCache.prototype.get = listCacheGet;
-ListCache.prototype.has = listCacheHas;
-ListCache.prototype.set = listCacheSet;
-
-/**
- * Creates a map cache object to store key-value pairs.
- *
- * @private
- * @constructor
- * @param {Array} [entries] The key-value pairs to cache.
- */
-function MapCache(entries) {
-  var index = -1,
-      length = entries ? entries.length : 0;
-
-  this.clear();
-  while (++index < length) {
-    var entry = entries[index];
-    this.set(entry[0], entry[1]);
-  }
-}
-
-/**
- * Removes all key-value entries from the map.
- *
- * @private
- * @name clear
- * @memberOf MapCache
- */
-function mapCacheClear() {
-  this.__data__ = {
-    'hash': new Hash,
-    'map': new (Map || ListCache),
-    'string': new Hash
-  };
-}
-
-/**
- * Removes `key` and its value from the map.
- *
- * @private
- * @name delete
- * @memberOf MapCache
- * @param {string} key The key of the value to remove.
- * @returns {boolean} Returns `true` if the entry was removed, else `false`.
- */
-function mapCacheDelete(key) {
-  return getMapData(this, key)['delete'](key);
-}
-
-/**
- * Gets the map value for `key`.
- *
- * @private
- * @name get
- * @memberOf MapCache
- * @param {string} key The key of the value to get.
- * @returns {*} Returns the entry value.
- */
-function mapCacheGet(key) {
-  return getMapData(this, key).get(key);
-}
-
-/**
- * Checks if a map value for `key` exists.
- *
- * @private
- * @name has
- * @memberOf MapCache
- * @param {string} key The key of the entry to check.
- * @returns {boolean} Returns `true` if an entry for `key` exists, else `false`.
- */
-function mapCacheHas(key) {
-  return getMapData(this, key).has(key);
-}
-
-/**
- * Sets the map `key` to `value`.
- *
- * @private
- * @name set
- * @memberOf MapCache
- * @param {string} key The key of the value to set.
- * @param {*} value The value to set.
- * @returns {Object} Returns the map cache instance.
- */
-function mapCacheSet(key, value) {
-  getMapData(this, key).set(key, value);
-  return this;
-}
-
-// Add methods to `MapCache`.
-MapCache.prototype.clear = mapCacheClear;
-MapCache.prototype['delete'] = mapCacheDelete;
-MapCache.prototype.get = mapCacheGet;
-MapCache.prototype.has = mapCacheHas;
-MapCache.prototype.set = mapCacheSet;
-
-/**
- *
- * Creates an array cache object to store unique values.
- *
- * @private
- * @constructor
- * @param {Array} [values] The values to cache.
- */
-function SetCache(values) {
-  var index = -1,
-      length = values ? values.length : 0;
-
-  this.__data__ = new MapCache;
-  while (++index < length) {
-    this.add(values[index]);
-  }
-}
-
-/**
- * Adds `value` to the array cache.
- *
- * @private
- * @name add
- * @memberOf SetCache
- * @alias push
- * @param {*} value The value to cache.
- * @returns {Object} Returns the cache instance.
- */
-function setCacheAdd(value) {
-  this.__data__.set(value, HASH_UNDEFINED);
-  return this;
-}
-
-/**
- * Checks if `value` is in the array cache.
- *
- * @private
- * @name has
- * @memberOf SetCache
- * @param {*} value The value to search for.
- * @returns {number} Returns `true` if `value` is found, else `false`.
- */
-function setCacheHas(value) {
-  return this.__data__.has(value);
-}
-
-// Add methods to `SetCache`.
-SetCache.prototype.add = SetCache.prototype.push = setCacheAdd;
-SetCache.prototype.has = setCacheHas;
-
-/**
- * Gets the index at which the `key` is found in `array` of key-value pairs.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {*} key The key to search for.
- * @returns {number} Returns the index of the matched value, else `-1`.
- */
-function assocIndexOf(array, key) {
-  var length = array.length;
-  while (length--) {
-    if (eq(array[length][0], key)) {
-      return length;
-    }
-  }
-  return -1;
-}
-
-/**
- * The base implementation of `_.isNative` without bad shim checks.
- *
- * @private
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is a native function,
- *  else `false`.
- */
-function baseIsNative(value) {
-  if (!isObject(value) || isMasked(value)) {
-    return false;
-  }
-  var pattern = (isFunction(value) || isHostObject(value)) ? reIsNative : reIsHostCtor;
-  return pattern.test(toSource(value));
-}
-
-/**
- * The base implementation of `_.uniqBy` without support for iteratee shorthands.
- *
- * @private
- * @param {Array} array The array to inspect.
- * @param {Function} [iteratee] The iteratee invoked per element.
- * @param {Function} [comparator] The comparator invoked per element.
- * @returns {Array} Returns the new duplicate free array.
- */
-function baseUniq(array, iteratee, comparator) {
-  var index = -1,
-      includes = arrayIncludes,
-      length = array.length,
-      isCommon = true,
-      result = [],
-      seen = result;
-
-  if (comparator) {
-    isCommon = false;
-    includes = arrayIncludesWith;
-  }
-  else if (length >= LARGE_ARRAY_SIZE) {
-    var set = iteratee ? null : createSet(array);
-    if (set) {
-      return setToArray(set);
-    }
-    isCommon = false;
-    includes = cacheHas;
-    seen = new SetCache;
-  }
-  else {
-    seen = iteratee ? [] : result;
-  }
-  outer:
-  while (++index < length) {
-    var value = array[index],
-        computed = iteratee ? iteratee(value) : value;
-
-    value = (comparator || value !== 0) ? value : 0;
-    if (isCommon && computed === computed) {
-      var seenIndex = seen.length;
-      while (seenIndex--) {
-        if (seen[seenIndex] === computed) {
-          continue outer;
-        }
-      }
-      if (iteratee) {
-        seen.push(computed);
-      }
-      result.push(value);
-    }
-    else if (!includes(seen, computed, comparator)) {
-      if (seen !== result) {
-        seen.push(computed);
-      }
-      result.push(value);
-    }
-  }
-  return result;
-}
-
-/**
- * Creates a set object of `values`.
- *
- * @private
- * @param {Array} values The values to add to the set.
- * @returns {Object} Returns the new set.
- */
-var createSet = !(Set && (1 / setToArray(new Set([,-0]))[1]) == INFINITY) ? noop : function(values) {
-  return new Set(values);
-};
-
-/**
- * Gets the data for `map`.
- *
- * @private
- * @param {Object} map The map to query.
- * @param {string} key The reference key.
- * @returns {*} Returns the map data.
- */
-function getMapData(map, key) {
-  var data = map.__data__;
-  return isKeyable(key)
-    ? data[typeof key == 'string' ? 'string' : 'hash']
-    : data.map;
-}
-
-/**
- * Gets the native function at `key` of `object`.
- *
- * @private
- * @param {Object} object The object to query.
- * @param {string} key The key of the method to get.
- * @returns {*} Returns the function if it's native, else `undefined`.
- */
-function getNative(object, key) {
-  var value = getValue(object, key);
-  return baseIsNative(value) ? value : undefined;
-}
-
-/**
- * Checks if `value` is suitable for use as unique object key.
- *
- * @private
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is suitable, else `false`.
- */
-function isKeyable(value) {
-  var type = typeof value;
-  return (type == 'string' || type == 'number' || type == 'symbol' || type == 'boolean')
-    ? (value !== '__proto__')
-    : (value === null);
-}
-
-/**
- * Checks if `func` has its source masked.
- *
- * @private
- * @param {Function} func The function to check.
- * @returns {boolean} Returns `true` if `func` is masked, else `false`.
- */
-function isMasked(func) {
-  return !!maskSrcKey && (maskSrcKey in func);
-}
-
-/**
- * Converts `func` to its source code.
- *
- * @private
- * @param {Function} func The function to process.
- * @returns {string} Returns the source code.
- */
-function toSource(func) {
-  if (func != null) {
-    try {
-      return funcToString.call(func);
-    } catch (e) {}
-    try {
-      return (func + '');
-    } catch (e) {}
-  }
-  return '';
-}
-
-/**
- * Creates a duplicate-free version of an array, using
- * [`SameValueZero`](http://ecma-international.org/ecma-262/7.0/#sec-samevaluezero)
- * for equality comparisons, in which only the first occurrence of each
- * element is kept.
- *
- * @static
- * @memberOf _
- * @since 0.1.0
- * @category Array
- * @param {Array} array The array to inspect.
- * @returns {Array} Returns the new duplicate free array.
- * @example
- *
- * _.uniq([2, 1, 2]);
- * // => [2, 1]
- */
-function uniq(array) {
-  return (array && array.length)
-    ? baseUniq(array)
-    : [];
-}
-
-/**
- * Performs a
- * [`SameValueZero`](http://ecma-international.org/ecma-262/7.0/#sec-samevaluezero)
- * comparison between two values to determine if they are equivalent.
- *
- * @static
- * @memberOf _
- * @since 4.0.0
- * @category Lang
- * @param {*} value The value to compare.
- * @param {*} other The other value to compare.
- * @returns {boolean} Returns `true` if the values are equivalent, else `false`.
- * @example
- *
- * var object = { 'a': 1 };
- * var other = { 'a': 1 };
- *
- * _.eq(object, object);
- * // => true
- *
- * _.eq(object, other);
- * // => false
- *
- * _.eq('a', 'a');
- * // => true
- *
- * _.eq('a', Object('a'));
- * // => false
- *
- * _.eq(NaN, NaN);
- * // => true
- */
-function eq(value, other) {
-  return value === other || (value !== value && other !== other);
-}
-
-/**
- * Checks if `value` is classified as a `Function` object.
- *
- * @static
- * @memberOf _
- * @since 0.1.0
- * @category Lang
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is a function, else `false`.
- * @example
- *
- * _.isFunction(_);
- * // => true
- *
- * _.isFunction(/abc/);
- * // => false
- */
-function isFunction(value) {
-  // The use of `Object#toString` avoids issues with the `typeof` operator
-  // in Safari 8-9 which returns 'object' for typed array and other constructors.
-  var tag = isObject(value) ? objectToString.call(value) : '';
-  return tag == funcTag || tag == genTag;
-}
-
-/**
- * Checks if `value` is the
- * [language type](http://www.ecma-international.org/ecma-262/7.0/#sec-ecmascript-language-types)
- * of `Object`. (e.g. arrays, functions, objects, regexes, `new Number(0)`, and `new String('')`)
- *
- * @static
- * @memberOf _
- * @since 0.1.0
- * @category Lang
- * @param {*} value The value to check.
- * @returns {boolean} Returns `true` if `value` is an object, else `false`.
- * @example
- *
- * _.isObject({});
- * // => true
- *
- * _.isObject([1, 2, 3]);
- * // => true
- *
- * _.isObject(_.noop);
- * // => true
- *
- * _.isObject(null);
- * // => false
- */
-function isObject(value) {
-  var type = typeof value;
-  return !!value && (type == 'object' || type == 'function');
-}
-
-/**
- * This method returns `undefined`.
- *
- * @static
- * @memberOf _
- * @since 2.3.0
- * @category Util
- * @example
- *
- * _.times(2, _.noop);
- * // => [undefined, undefined]
- */
-function noop() {
-  // No operation performed.
-}
-
-module.exports = uniq;
-
-
-/***/ }),
-
-/***/ 129:
-/***/ (function(module) {
-
-module.exports = require("child_process");
-
-/***/ }),
-
-/***/ 143:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-module.exports = withAuthorizationPrefix;
-
-const atob = __webpack_require__(368);
-
-const REGEX_IS_BASIC_AUTH = /^[\w-]+:/;
-
-function withAuthorizationPrefix(authorization) {
-  if (/^(basic|bearer|token) /i.test(authorization)) {
-    return authorization;
-  }
-
-  try {
-    if (REGEX_IS_BASIC_AUTH.test(atob(authorization))) {
-      return `basic ${authorization}`;
-    }
-  } catch (error) {}
-
-  if (authorization.split(/\./).length === 3) {
-    return `bearer ${authorization}`;
-  }
-
-  return `token ${authorization}`;
-}
-
-
-/***/ }),
-
-/***/ 145:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-"use strict";
-
-const pump = __webpack_require__(453);
-const bufferStream = __webpack_require__(966);
-
-class MaxBufferError extends Error {
-	constructor() {
-		super('maxBuffer exceeded');
-		this.name = 'MaxBufferError';
-	}
-}
-
-function getStream(inputStream, options) {
-	if (!inputStream) {
-		return Promise.reject(new Error('Expected a stream'));
-	}
-
-	options = Object.assign({maxBuffer: Infinity}, options);
-
-	const {maxBuffer} = options;
-
-	let stream;
-	return new Promise((resolve, reject) => {
-		const rejectPromise = error => {
-			if (error) { // A null check
-				error.bufferedData = stream.getBufferedValue();
-			}
-			reject(error);
-		};
-
-		stream = pump(inputStream, bufferStream(options), error => {
-			if (error) {
-				rejectPromise(error);
-				return;
-			}
-
-			resolve();
-		});
-
-		stream.on('data', () => {
-			if (stream.getBufferedLength() > maxBuffer) {
-				rejectPromise(new MaxBufferError());
-			}
-		});
-	}).then(() => stream.getBufferedValue());
-}
-
-module.exports = getStream;
-module.exports.buffer = (stream, options) => getStream(stream, Object.assign({}, options, {encoding: 'buffer'}));
-module.exports.array = (stream, options) => getStream(stream, Object.assign({}, options, {array: true}));
-module.exports.MaxBufferError = MaxBufferError;
-
-
-/***/ }),
-
-/***/ 148:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-module.exports = paginatePlugin;
-
-const { paginateRest } = __webpack_require__(299);
-
-function paginatePlugin(octokit) {
-  Object.assign(octokit, paginateRest(octokit));
-}
-
-
-/***/ }),
-
-/***/ 168:
-/***/ (function(module) {
-
-"use strict";
-
-const alias = ['stdin', 'stdout', 'stderr'];
-
-const hasAlias = opts => alias.some(x => Boolean(opts[x]));
-
-module.exports = opts => {
-	if (!opts) {
-		return null;
-	}
-
-	if (opts.stdio && hasAlias(opts)) {
-		throw new Error(`It's not possible to provide \`stdio\` in combination with one of ${alias.map(x => `\`${x}\``).join(', ')}`);
-	}
-
-	if (typeof opts.stdio === 'string') {
-		return opts.stdio;
-	}
-
-	const stdio = opts.stdio || [];
-
-	if (!Array.isArray(stdio)) {
-		throw new TypeError(`Expected \`stdio\` to be of type \`string\` or \`Array\`, got \`${typeof stdio}\``);
-	}
-
-	const result = [];
-	const len = Math.max(stdio.length, alias.length);
-
-	for (let i = 0; i < len; i++) {
-		let value = null;
-
-		if (stdio[i] !== undefined) {
-			value = stdio[i];
-		} else if (opts[alias[i]] !== undefined) {
-			value = opts[alias[i]];
-		}
-
-		result[i] = value;
-	}
-
-	return result;
-};
-
-
-/***/ }),
-
-/***/ 190:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-module.exports = authenticationPlugin;
-
-const { createTokenAuth } = __webpack_require__(813);
-const { Deprecation } = __webpack_require__(692);
-const once = __webpack_require__(969);
-
-const beforeRequest = __webpack_require__(863);
-const requestError = __webpack_require__(293);
-const validate = __webpack_require__(954);
-const withAuthorizationPrefix = __webpack_require__(143);
-
-const deprecateAuthBasic = once((log, deprecation) => log.warn(deprecation));
-const deprecateAuthObject = once((log, deprecation) => log.warn(deprecation));
-
-function authenticationPlugin(octokit, options) {
-  // If `options.authStrategy` is set then use it and pass in `options.auth`
-  if (options.authStrategy) {
-    const auth = options.authStrategy(options.auth);
-    octokit.hook.wrap("request", auth.hook);
-    octokit.auth = auth;
-    return;
-  }
-
-  // If neither `options.authStrategy` nor `options.auth` are set, the `octokit` instance
-  // is unauthenticated. The `octokit.auth()` method is a no-op and no request hook is registred.
-  if (!options.auth) {
-    octokit.auth = () =>
-      Promise.resolve({
-        type: "unauthenticated"
-      });
-    return;
-  }
-
-  const isBasicAuthString =
-    typeof options.auth === "string" &&
-    /^basic/.test(withAuthorizationPrefix(options.auth));
-
-  // If only `options.auth` is set to a string, use the default token authentication strategy.
-  if (typeof options.auth === "string" && !isBasicAuthString) {
-    const auth = createTokenAuth(options.auth);
-    octokit.hook.wrap("request", auth.hook);
-    octokit.auth = auth;
-    return;
-  }
-
-  // Otherwise log a deprecation message
-  const [deprecationMethod, deprecationMessapge] = isBasicAuthString
-    ? [
-        deprecateAuthBasic,
-        'Setting the "new Octokit({ auth })" option to a Basic Auth string is deprecated. Use https://github.com/octokit/auth-basic.js instead. See (https://octokit.github.io/rest.js/#authentication)'
-      ]
-    : [
-        deprecateAuthObject,
-        'Setting the "new Octokit({ auth })" option to an object without also setting the "authStrategy" option is deprecated and will be removed in v17. See (https://octokit.github.io/rest.js/#authentication)'
-      ];
-  deprecationMethod(
-    octokit.log,
-    new Deprecation("[@octokit/rest] " + deprecationMessapge)
-  );
-
-  octokit.auth = () =>
-    Promise.resolve({
-      type: "deprecated",
-      message: deprecationMessapge
-    });
-
-  validate(options.auth);
-
-  const state = {
-    octokit,
-    auth: options.auth
-  };
-
-  octokit.hook.before("request", beforeRequest.bind(null, state));
-  octokit.hook.error("request", requestError.bind(null, state));
-}
-
-
-/***/ }),
-
-/***/ 197:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-module.exports = isexe
-isexe.sync = sync
-
-var fs = __webpack_require__(747)
-
-function isexe (path, options, cb) {
-  fs.stat(path, function (er, stat) {
-    cb(er, er ? false : checkStat(stat, options))
-  })
-}
-
-function sync (path, options) {
-  return checkStat(fs.statSync(path), options)
-}
-
-function checkStat (stat, options) {
-  return stat.isFile() && checkMode(stat, options)
-}
-
-function checkMode (stat, options) {
-  var mod = stat.mode
-  var uid = stat.uid
-  var gid = stat.gid
-
-  var myUid = options.uid !== undefined ?
-    options.uid : process.getuid && process.getuid()
-  var myGid = options.gid !== undefined ?
-    options.gid : process.getgid && process.getgid()
-
-  var u = parseInt('100', 8)
-  var g = parseInt('010', 8)
-  var o = parseInt('001', 8)
-  var ug = u | g
-
-  var ret = (mod & o) ||
-    (mod & g) && gid === myGid ||
-    (mod & u) && uid === myUid ||
-    (mod & ug) && myUid === 0
-
-  return ret
-}
-
-
-/***/ }),
-
-/***/ 211:
-/***/ (function(module) {
-
-module.exports = require("https");
-
-/***/ }),
-
-/***/ 215:
-/***/ (function(module) {
-
-module.exports = {"name":"@octokit/rest","version":"16.43.1","publishConfig":{"access":"public"},"description":"GitHub REST API client for Node.js","keywords":["octokit","github","rest","api-client"],"author":"Gregor Martynus (https://github.com/gr2m)","contributors":[{"name":"Mike de Boer","email":"info@mikedeboer.nl"},{"name":"Fabian Jakobs","email":"fabian@c9.io"},{"name":"Joe Gallo","email":"joe@brassafrax.com"},{"name":"Gregor Martynus","url":"https://github.com/gr2m"}],"repository":"https://github.com/octokit/rest.js","dependencies":{"@octokit/auth-token":"^2.4.0","@octokit/plugin-paginate-rest":"^1.1.1","@octokit/plugin-request-log":"^1.0.0","@octokit/plugin-rest-endpoint-methods":"2.4.0","@octokit/request":"^5.2.0","@octokit/request-error":"^1.0.2","atob-lite":"^2.0.0","before-after-hook":"^2.0.0","btoa-lite":"^1.0.0","deprecation":"^2.0.0","lodash.get":"^4.4.2","lodash.set":"^4.3.2","lodash.uniq":"^4.5.0","octokit-pagination-methods":"^1.1.0","once":"^1.4.0","universal-user-agent":"^4.0.0"},"devDependencies":{"@gimenete/type-writer":"^0.1.3","@octokit/auth":"^1.1.1","@octokit/fixtures-server":"^5.0.6","@octokit/graphql":"^4.2.0","@types/node":"^13.1.0","bundlesize":"^0.18.0","chai":"^4.1.2","compression-webpack-plugin":"^3.1.0","cypress":"^3.0.0","glob":"^7.1.2","http-proxy-agent":"^4.0.0","lodash.camelcase":"^4.3.0","lodash.merge":"^4.6.1","lodash.upperfirst":"^4.3.1","lolex":"^5.1.2","mkdirp":"^1.0.0","mocha":"^7.0.1","mustache":"^4.0.0","nock":"^11.3.3","npm-run-all":"^4.1.2","nyc":"^15.0.0","prettier":"^1.14.2","proxy":"^1.0.0","semantic-release":"^17.0.0","sinon":"^8.0.0","sinon-chai":"^3.0.0","sort-keys":"^4.0.0","string-to-arraybuffer":"^1.0.0","string-to-jsdoc-comment":"^1.0.0","typescript":"^3.3.1","webpack":"^4.0.0","webpack-bundle-analyzer":"^3.0.0","webpack-cli":"^3.0.0"},"types":"index.d.ts","scripts":{"coverage":"nyc report --reporter=html && open coverage/index.html","lint":"prettier --check '{lib,plugins,scripts,test}/**/*.{js,json,ts}' 'docs/*.{js,json}' 'docs/src/**/*' index.js README.md package.json","lint:fix":"prettier --write '{lib,plugins,scripts,test}/**/*.{js,json,ts}' 'docs/*.{js,json}' 'docs/src/**/*' index.js README.md package.json","pretest":"npm run -s lint","test":"nyc mocha test/mocha-node-setup.js \"test/*/**/*-test.js\"","test:browser":"cypress run --browser chrome","build":"npm-run-all build:*","build:ts":"npm run -s update-endpoints:typescript","prebuild:browser":"mkdirp dist/","build:browser":"npm-run-all build:browser:*","build:browser:development":"webpack --mode development --entry . --output-library=Octokit --output=./dist/octokit-rest.js --profile --json > dist/bundle-stats.json","build:browser:production":"webpack --mode production --entry . --plugin=compression-webpack-plugin --output-library=Octokit --output-path=./dist --output-filename=octokit-rest.min.js --devtool source-map","generate-bundle-report":"webpack-bundle-analyzer dist/bundle-stats.json --mode=static --no-open --report dist/bundle-report.html","update-endpoints":"npm-run-all update-endpoints:*","update-endpoints:fetch-json":"node scripts/update-endpoints/fetch-json","update-endpoints:typescript":"node scripts/update-endpoints/typescript","prevalidate:ts":"npm run -s build:ts","validate:ts":"tsc --target es6 --noImplicitAny index.d.ts","postvalidate:ts":"tsc --noEmit --target es6 test/typescript-validate.ts","start-fixtures-server":"octokit-fixtures-server"},"license":"MIT","files":["index.js","index.d.ts","lib","plugins"],"nyc":{"ignore":["test"]},"release":{"publish":["@semantic-release/npm",{"path":"@semantic-release/github","assets":["dist/*","!dist/*.map.gz"]}]},"bundlesize":[{"path":"./dist/octokit-rest.min.js.gz","maxSize":"33 kB"}]};
-
-/***/ }),
-
-/***/ 260:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-// Note: since nyc uses this module to output coverage, any lines
-// that are in the direct sync flow of nyc's outputCoverage are
-// ignored, since we can never get coverage for them.
-var assert = __webpack_require__(357)
-var signals = __webpack_require__(654)
-
-var EE = __webpack_require__(614)
-/* istanbul ignore if */
-if (typeof EE !== 'function') {
-  EE = EE.EventEmitter
-}
-
-var emitter
-if (process.__signal_exit_emitter__) {
-  emitter = process.__signal_exit_emitter__
-} else {
-  emitter = process.__signal_exit_emitter__ = new EE()
-  emitter.count = 0
-  emitter.emitted = {}
-}
-
-// Because this emitter is a global, we have to check to see if a
-// previous version of this library failed to enable infinite listeners.
-// I know what you're about to say.  But literally everything about
-// signal-exit is a compromise with evil.  Get used to it.
-if (!emitter.infinite) {
-  emitter.setMaxListeners(Infinity)
-  emitter.infinite = true
-}
-
-module.exports = function (cb, opts) {
-  assert.equal(typeof cb, 'function', 'a callback must be provided for exit handler')
-
-  if (loaded === false) {
-    load()
-  }
-
-  var ev = 'exit'
-  if (opts && opts.alwaysLast) {
-    ev = 'afterexit'
-  }
-
-  var remove = function () {
-    emitter.removeListener(ev, cb)
-    if (emitter.listeners('exit').length === 0 &&
-        emitter.listeners('afterexit').length === 0) {
-      unload()
-    }
-  }
-  emitter.on(ev, cb)
-
-  return remove
-}
-
-module.exports.unload = unload
-function unload () {
-  if (!loaded) {
-    return
-  }
-  loaded = false
-
-  signals.forEach(function (sig) {
-    try {
-      process.removeListener(sig, sigListeners[sig])
-    } catch (er) {}
-  })
-  process.emit = originalProcessEmit
-  process.reallyExit = originalProcessReallyExit
-  emitter.count -= 1
-}
-
-function emit (event, code, signal) {
-  if (emitter.emitted[event]) {
-    return
-  }
-  emitter.emitted[event] = true
-  emitter.emit(event, code, signal)
-}
-
-// { <signal>: <listener fn>, ... }
-var sigListeners = {}
-signals.forEach(function (sig) {
-  sigListeners[sig] = function listener () {
-    // If there are no other listeners, an exit is coming!
-    // Simplest way: remove us and then re-send the signal.
-    // We know that this will kill the process, so we can
-    // safely emit now.
-    var listeners = process.listeners(sig)
-    if (listeners.length === emitter.count) {
-      unload()
-      emit('exit', null, sig)
-      /* istanbul ignore next */
-      emit('afterexit', null, sig)
-      /* istanbul ignore next */
-      process.kill(process.pid, sig)
-    }
-  }
-})
-
-module.exports.signals = function () {
-  return signals
-}
-
-module.exports.load = load
-
-var loaded = false
-
-function load () {
-  if (loaded) {
-    return
-  }
-  loaded = true
-
-  // This is the number of onSignalExit's that are in play.
-  // It's important so that we can count the correct number of
-  // listeners on signals, and don't wait for the other one to
-  // handle it instead of us.
-  emitter.count += 1
-
-  signals = signals.filter(function (sig) {
-    try {
-      process.on(sig, sigListeners[sig])
-      return true
-    } catch (er) {
-      return false
-    }
-  })
-
-  process.emit = processEmit
-  process.reallyExit = processReallyExit
-}
-
-var originalProcessReallyExit = process.reallyExit
-function processReallyExit (code) {
-  process.exitCode = code || 0
-  emit('exit', process.exitCode, null)
-  /* istanbul ignore next */
-  emit('afterexit', process.exitCode, null)
-  /* istanbul ignore next */
-  originalProcessReallyExit.call(process, process.exitCode)
-}
-
-var originalProcessEmit = process.emit
-function processEmit (ev, arg) {
-  if (ev === 'exit') {
-    if (arg !== undefined) {
-      process.exitCode = arg
-    }
-    var ret = originalProcessEmit.apply(this, arguments)
-    emit('exit', process.exitCode, null)
-    /* istanbul ignore next */
-    emit('afterexit', process.exitCode, null)
-    return ret
-  } else {
-    return originalProcessEmit.apply(this, arguments)
-  }
-}
-
-
-/***/ }),
-
-/***/ 262:
-/***/ (function(__unusedmodule, exports, __webpack_require__) {
-
-"use strict";
-
-Object.defineProperty(exports, "__esModule", { value: true });
-const fs_1 = __webpack_require__(747);
-const os_1 = __webpack_require__(87);
-class Context {
-    /**
-     * Hydrate the context from the environment
-     */
-    constructor() {
-        this.payload = {};
-        if (process.env.GITHUB_EVENT_PATH) {
-            if (fs_1.existsSync(process.env.GITHUB_EVENT_PATH)) {
-                this.payload = JSON.parse(fs_1.readFileSync(process.env.GITHUB_EVENT_PATH, { encoding: 'utf8' }));
-            }
-            else {
-                process.stdout.write(`GITHUB_EVENT_PATH ${process.env.GITHUB_EVENT_PATH} does not exist${os_1.EOL}`);
-            }
-        }
-        this.eventName = process.env.GITHUB_EVENT_NAME;
-        this.sha = process.env.GITHUB_SHA;
-        this.ref = process.env.GITHUB_REF;
-        this.workflow = process.env.GITHUB_WORKFLOW;
-        this.action = process.env.GITHUB_ACTION;
-        this.actor = process.env.GITHUB_ACTOR;
-    }
-    get issue() {
-        const payload = this.payload;
-        return Object.assign(Object.assign({}, this.repo), { number: (payload.issue || payload.pullRequest || payload).number });
-    }
-    get repo() {
-        if (process.env.GITHUB_REPOSITORY) {
-            const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
-            return { owner, repo };
-        }
-        if (this.payload.repository) {
-            return {
-                owner: this.payload.repository.owner.login,
-                repo: this.payload.repository.name
-            };
-        }
-        throw new Error("context.repo requires a GITHUB_REPOSITORY environment variable like 'owner/repo'");
-    }
-}
-exports.Context = Context;
-//# sourceMappingURL=context.js.map
-
-/***/ }),
-
-/***/ 265:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-module.exports = getPage
-
-const deprecate = __webpack_require__(370)
-const getPageLinks = __webpack_require__(577)
-const HttpError = __webpack_require__(297)
-
-function getPage (octokit, link, which, headers) {
-  deprecate(`octokit.get${which.charAt(0).toUpperCase() + which.slice(1)}Page() – You can use octokit.paginate or async iterators instead: https://github.com/octokit/rest.js#pagination.`)
-  const url = getPageLinks(link)[which]
-
-  if (!url) {
-    const urlError = new HttpError(`No ${which} page found`, 404)
-    return Promise.reject(urlError)
-  }
-
-  const requestOptions = {
-    url,
-    headers: applyAcceptHeader(link, headers)
-  }
-
-  const promise = octokit.request(requestOptions)
-
-  return promise
-}
-
-function applyAcceptHeader (res, headers) {
-  const previous = res.headers && res.headers['x-github-media-type']
-
-  if (!previous || (headers && headers.accept)) {
-    return headers
-  }
-  headers = headers || {}
-  headers.accept = 'application/vnd.' + previous
-    .replace('; param=', '.')
-    .replace('; format=', '+')
-
-  return headers
-}
-
-
-/***/ }),
-
-/***/ 280:
-/***/ (function(module) {
-
-module.exports = register
-
-function register (state, name, method, options) {
-  if (typeof method !== 'function') {
-    throw new Error('method for before hook must be a function')
-  }
-
-  if (!options) {
-    options = {}
-  }
-
-  if (Array.isArray(name)) {
-    return name.reverse().reduce(function (callback, name) {
-      return register.bind(null, state, name, callback, options)
-    }, method)()
-  }
-
-  return Promise.resolve()
-    .then(function () {
-      if (!state.registry[name]) {
-        return method(options)
-      }
-
-      return (state.registry[name]).reduce(function (method, registered) {
-        return registered.hook.bind(null, method, options)
-      }, method)()
-    })
-}
-
-
-/***/ }),
-
 /***/ 293:
 /***/ (function(module, __unusedexports, __webpack_require__) {
 
@@ -3902,13 +4177,6 @@ exports.paginateRest = paginateRest;
 
 /***/ }),
 
-/***/ 314:
-/***/ (function(module) {
-
-module.exports = {"name":"@octokit/graphql","version":"2.1.3","publishConfig":{"access":"public"},"description":"GitHub GraphQL API client for browsers and Node","main":"index.js","scripts":{"prebuild":"mkdirp dist/","build":"npm-run-all build:*","build:development":"webpack --mode development --entry . --output-library=octokitGraphql --output=./dist/octokit-graphql.js --profile --json > dist/bundle-stats.json","build:production":"webpack --mode production --entry . --plugin=compression-webpack-plugin --output-library=octokitGraphql --output-path=./dist --output-filename=octokit-graphql.min.js --devtool source-map","bundle-report":"webpack-bundle-analyzer dist/bundle-stats.json --mode=static --no-open --report dist/bundle-report.html","coverage":"nyc report --reporter=html && open coverage/index.html","coverage:upload":"nyc report --reporter=text-lcov | coveralls","pretest":"standard","test":"nyc mocha test/*-test.js","test:browser":"cypress run --browser chrome"},"repository":{"type":"git","url":"https://github.com/octokit/graphql.js.git"},"keywords":["octokit","github","api","graphql"],"author":"Gregor Martynus (https://github.com/gr2m)","license":"MIT","bugs":{"url":"https://github.com/octokit/graphql.js/issues"},"homepage":"https://github.com/octokit/graphql.js#readme","dependencies":{"@octokit/request":"^5.0.0","universal-user-agent":"^2.0.3"},"devDependencies":{"chai":"^4.2.0","compression-webpack-plugin":"^2.0.0","coveralls":"^3.0.3","cypress":"^3.1.5","fetch-mock":"^7.3.1","mkdirp":"^0.5.1","mocha":"^6.0.0","npm-run-all":"^4.1.3","nyc":"^14.0.0","semantic-release":"^15.13.3","simple-mock":"^0.8.0","standard":"^12.0.1","webpack":"^4.29.6","webpack-bundle-analyzer":"^3.1.0","webpack-cli":"^3.2.3"},"bundlesize":[{"path":"./dist/octokit-graphql.min.js.gz","maxSize":"5KB"}],"release":{"publish":["@semantic-release/npm",{"path":"@semantic-release/github","assets":["dist/*","!dist/*.map.gz"]}]},"standard":{"globals":["describe","before","beforeEach","afterEach","after","it","expect"]},"files":["lib"]};
-
-/***/ }),
-
 /***/ 323:
 /***/ (function(module) {
 
@@ -4179,6 +4447,41 @@ function authenticationRequestError(state, error, options) {
 /***/ (function(module) {
 
 module.exports = require("assert");
+
+/***/ }),
+
+/***/ 363:
+/***/ (function(module) {
+
+module.exports = register
+
+function register (state, name, method, options) {
+  if (typeof method !== 'function') {
+    throw new Error('method for before hook must be a function')
+  }
+
+  if (!options) {
+    options = {}
+  }
+
+  if (Array.isArray(name)) {
+    return name.reverse().reduce(function (callback, name) {
+      return register.bind(null, state, name, callback, options)
+    }, method)()
+  }
+
+  return Promise.resolve()
+    .then(function () {
+      if (!state.registry[name]) {
+        return method(options)
+      }
+
+      return (state.registry[name]).reduce(function (method, registered) {
+        return registered.hook.bind(null, method, options)
+      }, method)()
+    })
+}
+
 
 /***/ }),
 
@@ -6699,18 +7002,83 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 // Originally pulled from https://github.com/JasonEtco/actions-toolkit/blob/master/src/github.ts
-const graphql_1 = __webpack_require__(503);
-const rest_1 = __importDefault(__webpack_require__(613));
+const graphql_1 = __webpack_require__(898);
+const rest_1 = __importDefault(__webpack_require__(0));
 const Context = __importStar(__webpack_require__(262));
+const httpClient = __importStar(__webpack_require__(539));
 // We need this in order to extend Octokit
 rest_1.default.prototype = new rest_1.default();
 exports.context = new Context.Context();
 class GitHub extends rest_1.default {
-    constructor(token, opts = {}) {
-        super(Object.assign(Object.assign({}, opts), { auth: `token ${token}` }));
-        this.graphql = graphql_1.defaults({
-            headers: { authorization: `token ${token}` }
-        });
+    constructor(token, opts) {
+        super(GitHub.getOctokitOptions(GitHub.disambiguate(token, opts)));
+        this.graphql = GitHub.getGraphQL(GitHub.disambiguate(token, opts));
+    }
+    /**
+     * Disambiguates the constructor overload parameters
+     */
+    static disambiguate(token, opts) {
+        return [
+            typeof token === 'string' ? token : '',
+            typeof token === 'object' ? token : opts || {}
+        ];
+    }
+    static getOctokitOptions(args) {
+        const token = args[0];
+        const options = Object.assign({}, args[1]); // Shallow clone - don't mutate the object provided by the caller
+        // Auth
+        const auth = GitHub.getAuthString(token, options);
+        if (auth) {
+            options.auth = auth;
+        }
+        // Proxy
+        const agent = GitHub.getProxyAgent(options);
+        if (agent) {
+            // Shallow clone - don't mutate the object provided by the caller
+            options.request = options.request ? Object.assign({}, options.request) : {};
+            // Set the agent
+            options.request.agent = agent;
+        }
+        return options;
+    }
+    static getGraphQL(args) {
+        const defaults = {};
+        const token = args[0];
+        const options = args[1];
+        // Authorization
+        const auth = this.getAuthString(token, options);
+        if (auth) {
+            defaults.headers = {
+                authorization: auth
+            };
+        }
+        // Proxy
+        const agent = GitHub.getProxyAgent(options);
+        if (agent) {
+            defaults.request = { agent };
+        }
+        return graphql_1.graphql.defaults(defaults);
+    }
+    static getAuthString(token, options) {
+        // Validate args
+        if (!token && !options.auth) {
+            throw new Error('Parameter token or opts.auth is required');
+        }
+        else if (token && options.auth) {
+            throw new Error('Parameters token and opts.auth may not both be specified');
+        }
+        return typeof options.auth === 'string' ? options.auth : `token ${token}`;
+    }
+    static getProxyAgent(options) {
+        var _a;
+        if (!((_a = options.request) === null || _a === void 0 ? void 0 : _a.agent)) {
+            const serverUrl = 'https://api.github.com';
+            if (httpClient.getProxyUrl(serverUrl)) {
+                const hc = new httpClient.HttpClient();
+                return hc.getAgent(serverUrl);
+            }
+        }
+        return undefined;
     }
 }
 exports.GitHub = GitHub;
@@ -7032,71 +7400,6 @@ module.exports = resolveCommand;
 
 /***/ }),
 
-/***/ 500:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-module.exports = graphql
-
-const GraphqlError = __webpack_require__(862)
-
-const NON_VARIABLE_OPTIONS = ['method', 'baseUrl', 'url', 'headers', 'request', 'query']
-
-function graphql (request, query, options) {
-  if (typeof query === 'string') {
-    options = Object.assign({ query }, options)
-  } else {
-    options = query
-  }
-
-  const requestOptions = Object.keys(options).reduce((result, key) => {
-    if (NON_VARIABLE_OPTIONS.includes(key)) {
-      result[key] = options[key]
-      return result
-    }
-
-    if (!result.variables) {
-      result.variables = {}
-    }
-
-    result.variables[key] = options[key]
-    return result
-  }, {})
-
-  return request(requestOptions)
-    .then(response => {
-      if (response.data.errors) {
-        throw new GraphqlError(requestOptions, response)
-      }
-
-      return response.data.data
-    })
-}
-
-
-/***/ }),
-
-/***/ 503:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-const { request } = __webpack_require__(753)
-const getUserAgent = __webpack_require__(650)
-
-const version = __webpack_require__(314).version
-const userAgent = `octokit-graphql.js/${version} ${getUserAgent()}`
-
-const withDefaults = __webpack_require__(0)
-
-module.exports = withDefaults(request, {
-  method: 'POST',
-  url: '/graphql',
-  headers: {
-    'user-agent': userAgent
-  }
-})
-
-
-/***/ }),
-
 /***/ 510:
 /***/ (function(module) {
 
@@ -7153,7 +7456,7 @@ function addHook (state, kind, name, hook) {
 /***/ 523:
 /***/ (function(module, __unusedexports, __webpack_require__) {
 
-var register = __webpack_require__(280)
+var register = __webpack_require__(363)
 var addHook = __webpack_require__(510)
 var removeHook = __webpack_require__(763)
 
@@ -7240,6 +7543,514 @@ function hasFirstPage (link) {
 
 /***/ }),
 
+/***/ 539:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", { value: true });
+const url = __webpack_require__(835);
+const http = __webpack_require__(605);
+const https = __webpack_require__(211);
+const pm = __webpack_require__(950);
+let tunnel;
+var HttpCodes;
+(function (HttpCodes) {
+    HttpCodes[HttpCodes["OK"] = 200] = "OK";
+    HttpCodes[HttpCodes["MultipleChoices"] = 300] = "MultipleChoices";
+    HttpCodes[HttpCodes["MovedPermanently"] = 301] = "MovedPermanently";
+    HttpCodes[HttpCodes["ResourceMoved"] = 302] = "ResourceMoved";
+    HttpCodes[HttpCodes["SeeOther"] = 303] = "SeeOther";
+    HttpCodes[HttpCodes["NotModified"] = 304] = "NotModified";
+    HttpCodes[HttpCodes["UseProxy"] = 305] = "UseProxy";
+    HttpCodes[HttpCodes["SwitchProxy"] = 306] = "SwitchProxy";
+    HttpCodes[HttpCodes["TemporaryRedirect"] = 307] = "TemporaryRedirect";
+    HttpCodes[HttpCodes["PermanentRedirect"] = 308] = "PermanentRedirect";
+    HttpCodes[HttpCodes["BadRequest"] = 400] = "BadRequest";
+    HttpCodes[HttpCodes["Unauthorized"] = 401] = "Unauthorized";
+    HttpCodes[HttpCodes["PaymentRequired"] = 402] = "PaymentRequired";
+    HttpCodes[HttpCodes["Forbidden"] = 403] = "Forbidden";
+    HttpCodes[HttpCodes["NotFound"] = 404] = "NotFound";
+    HttpCodes[HttpCodes["MethodNotAllowed"] = 405] = "MethodNotAllowed";
+    HttpCodes[HttpCodes["NotAcceptable"] = 406] = "NotAcceptable";
+    HttpCodes[HttpCodes["ProxyAuthenticationRequired"] = 407] = "ProxyAuthenticationRequired";
+    HttpCodes[HttpCodes["RequestTimeout"] = 408] = "RequestTimeout";
+    HttpCodes[HttpCodes["Conflict"] = 409] = "Conflict";
+    HttpCodes[HttpCodes["Gone"] = 410] = "Gone";
+    HttpCodes[HttpCodes["InternalServerError"] = 500] = "InternalServerError";
+    HttpCodes[HttpCodes["NotImplemented"] = 501] = "NotImplemented";
+    HttpCodes[HttpCodes["BadGateway"] = 502] = "BadGateway";
+    HttpCodes[HttpCodes["ServiceUnavailable"] = 503] = "ServiceUnavailable";
+    HttpCodes[HttpCodes["GatewayTimeout"] = 504] = "GatewayTimeout";
+})(HttpCodes = exports.HttpCodes || (exports.HttpCodes = {}));
+var Headers;
+(function (Headers) {
+    Headers["Accept"] = "accept";
+    Headers["ContentType"] = "content-type";
+})(Headers = exports.Headers || (exports.Headers = {}));
+var MediaTypes;
+(function (MediaTypes) {
+    MediaTypes["ApplicationJson"] = "application/json";
+})(MediaTypes = exports.MediaTypes || (exports.MediaTypes = {}));
+/**
+ * Returns the proxy URL, depending upon the supplied url and proxy environment variables.
+ * @param serverUrl  The server URL where the request will be sent. For example, https://api.github.com
+ */
+function getProxyUrl(serverUrl) {
+    let proxyUrl = pm.getProxyUrl(url.parse(serverUrl));
+    return proxyUrl ? proxyUrl.href : '';
+}
+exports.getProxyUrl = getProxyUrl;
+const HttpRedirectCodes = [HttpCodes.MovedPermanently, HttpCodes.ResourceMoved, HttpCodes.SeeOther, HttpCodes.TemporaryRedirect, HttpCodes.PermanentRedirect];
+const HttpResponseRetryCodes = [HttpCodes.BadGateway, HttpCodes.ServiceUnavailable, HttpCodes.GatewayTimeout];
+const RetryableHttpVerbs = ['OPTIONS', 'GET', 'DELETE', 'HEAD'];
+const ExponentialBackoffCeiling = 10;
+const ExponentialBackoffTimeSlice = 5;
+class HttpClientResponse {
+    constructor(message) {
+        this.message = message;
+    }
+    readBody() {
+        return new Promise(async (resolve, reject) => {
+            let output = Buffer.alloc(0);
+            this.message.on('data', (chunk) => {
+                output = Buffer.concat([output, chunk]);
+            });
+            this.message.on('end', () => {
+                resolve(output.toString());
+            });
+        });
+    }
+}
+exports.HttpClientResponse = HttpClientResponse;
+function isHttps(requestUrl) {
+    let parsedUrl = url.parse(requestUrl);
+    return parsedUrl.protocol === 'https:';
+}
+exports.isHttps = isHttps;
+class HttpClient {
+    constructor(userAgent, handlers, requestOptions) {
+        this._ignoreSslError = false;
+        this._allowRedirects = true;
+        this._allowRedirectDowngrade = false;
+        this._maxRedirects = 50;
+        this._allowRetries = false;
+        this._maxRetries = 1;
+        this._keepAlive = false;
+        this._disposed = false;
+        this.userAgent = userAgent;
+        this.handlers = handlers || [];
+        this.requestOptions = requestOptions;
+        if (requestOptions) {
+            if (requestOptions.ignoreSslError != null) {
+                this._ignoreSslError = requestOptions.ignoreSslError;
+            }
+            this._socketTimeout = requestOptions.socketTimeout;
+            if (requestOptions.allowRedirects != null) {
+                this._allowRedirects = requestOptions.allowRedirects;
+            }
+            if (requestOptions.allowRedirectDowngrade != null) {
+                this._allowRedirectDowngrade = requestOptions.allowRedirectDowngrade;
+            }
+            if (requestOptions.maxRedirects != null) {
+                this._maxRedirects = Math.max(requestOptions.maxRedirects, 0);
+            }
+            if (requestOptions.keepAlive != null) {
+                this._keepAlive = requestOptions.keepAlive;
+            }
+            if (requestOptions.allowRetries != null) {
+                this._allowRetries = requestOptions.allowRetries;
+            }
+            if (requestOptions.maxRetries != null) {
+                this._maxRetries = requestOptions.maxRetries;
+            }
+        }
+    }
+    options(requestUrl, additionalHeaders) {
+        return this.request('OPTIONS', requestUrl, null, additionalHeaders || {});
+    }
+    get(requestUrl, additionalHeaders) {
+        return this.request('GET', requestUrl, null, additionalHeaders || {});
+    }
+    del(requestUrl, additionalHeaders) {
+        return this.request('DELETE', requestUrl, null, additionalHeaders || {});
+    }
+    post(requestUrl, data, additionalHeaders) {
+        return this.request('POST', requestUrl, data, additionalHeaders || {});
+    }
+    patch(requestUrl, data, additionalHeaders) {
+        return this.request('PATCH', requestUrl, data, additionalHeaders || {});
+    }
+    put(requestUrl, data, additionalHeaders) {
+        return this.request('PUT', requestUrl, data, additionalHeaders || {});
+    }
+    head(requestUrl, additionalHeaders) {
+        return this.request('HEAD', requestUrl, null, additionalHeaders || {});
+    }
+    sendStream(verb, requestUrl, stream, additionalHeaders) {
+        return this.request(verb, requestUrl, stream, additionalHeaders);
+    }
+    /**
+     * Gets a typed object from an endpoint
+     * Be aware that not found returns a null.  Other errors (4xx, 5xx) reject the promise
+     */
+    async getJson(requestUrl, additionalHeaders = {}) {
+        additionalHeaders[Headers.Accept] = this._getExistingOrDefaultHeader(additionalHeaders, Headers.Accept, MediaTypes.ApplicationJson);
+        let res = await this.get(requestUrl, additionalHeaders);
+        return this._processResponse(res, this.requestOptions);
+    }
+    async postJson(requestUrl, obj, additionalHeaders = {}) {
+        let data = JSON.stringify(obj, null, 2);
+        additionalHeaders[Headers.Accept] = this._getExistingOrDefaultHeader(additionalHeaders, Headers.Accept, MediaTypes.ApplicationJson);
+        additionalHeaders[Headers.ContentType] = this._getExistingOrDefaultHeader(additionalHeaders, Headers.ContentType, MediaTypes.ApplicationJson);
+        let res = await this.post(requestUrl, data, additionalHeaders);
+        return this._processResponse(res, this.requestOptions);
+    }
+    async putJson(requestUrl, obj, additionalHeaders = {}) {
+        let data = JSON.stringify(obj, null, 2);
+        additionalHeaders[Headers.Accept] = this._getExistingOrDefaultHeader(additionalHeaders, Headers.Accept, MediaTypes.ApplicationJson);
+        additionalHeaders[Headers.ContentType] = this._getExistingOrDefaultHeader(additionalHeaders, Headers.ContentType, MediaTypes.ApplicationJson);
+        let res = await this.put(requestUrl, data, additionalHeaders);
+        return this._processResponse(res, this.requestOptions);
+    }
+    async patchJson(requestUrl, obj, additionalHeaders = {}) {
+        let data = JSON.stringify(obj, null, 2);
+        additionalHeaders[Headers.Accept] = this._getExistingOrDefaultHeader(additionalHeaders, Headers.Accept, MediaTypes.ApplicationJson);
+        additionalHeaders[Headers.ContentType] = this._getExistingOrDefaultHeader(additionalHeaders, Headers.ContentType, MediaTypes.ApplicationJson);
+        let res = await this.patch(requestUrl, data, additionalHeaders);
+        return this._processResponse(res, this.requestOptions);
+    }
+    /**
+     * Makes a raw http request.
+     * All other methods such as get, post, patch, and request ultimately call this.
+     * Prefer get, del, post and patch
+     */
+    async request(verb, requestUrl, data, headers) {
+        if (this._disposed) {
+            throw new Error("Client has already been disposed.");
+        }
+        let parsedUrl = url.parse(requestUrl);
+        let info = this._prepareRequest(verb, parsedUrl, headers);
+        // Only perform retries on reads since writes may not be idempotent.
+        let maxTries = (this._allowRetries && RetryableHttpVerbs.indexOf(verb) != -1) ? this._maxRetries + 1 : 1;
+        let numTries = 0;
+        let response;
+        while (numTries < maxTries) {
+            response = await this.requestRaw(info, data);
+            // Check if it's an authentication challenge
+            if (response && response.message && response.message.statusCode === HttpCodes.Unauthorized) {
+                let authenticationHandler;
+                for (let i = 0; i < this.handlers.length; i++) {
+                    if (this.handlers[i].canHandleAuthentication(response)) {
+                        authenticationHandler = this.handlers[i];
+                        break;
+                    }
+                }
+                if (authenticationHandler) {
+                    return authenticationHandler.handleAuthentication(this, info, data);
+                }
+                else {
+                    // We have received an unauthorized response but have no handlers to handle it.
+                    // Let the response return to the caller.
+                    return response;
+                }
+            }
+            let redirectsRemaining = this._maxRedirects;
+            while (HttpRedirectCodes.indexOf(response.message.statusCode) != -1
+                && this._allowRedirects
+                && redirectsRemaining > 0) {
+                const redirectUrl = response.message.headers["location"];
+                if (!redirectUrl) {
+                    // if there's no location to redirect to, we won't
+                    break;
+                }
+                let parsedRedirectUrl = url.parse(redirectUrl);
+                if (parsedUrl.protocol == 'https:' && parsedUrl.protocol != parsedRedirectUrl.protocol && !this._allowRedirectDowngrade) {
+                    throw new Error("Redirect from HTTPS to HTTP protocol. This downgrade is not allowed for security reasons. If you want to allow this behavior, set the allowRedirectDowngrade option to true.");
+                }
+                // we need to finish reading the response before reassigning response
+                // which will leak the open socket.
+                await response.readBody();
+                // let's make the request with the new redirectUrl
+                info = this._prepareRequest(verb, parsedRedirectUrl, headers);
+                response = await this.requestRaw(info, data);
+                redirectsRemaining--;
+            }
+            if (HttpResponseRetryCodes.indexOf(response.message.statusCode) == -1) {
+                // If not a retry code, return immediately instead of retrying
+                return response;
+            }
+            numTries += 1;
+            if (numTries < maxTries) {
+                await response.readBody();
+                await this._performExponentialBackoff(numTries);
+            }
+        }
+        return response;
+    }
+    /**
+     * Needs to be called if keepAlive is set to true in request options.
+     */
+    dispose() {
+        if (this._agent) {
+            this._agent.destroy();
+        }
+        this._disposed = true;
+    }
+    /**
+     * Raw request.
+     * @param info
+     * @param data
+     */
+    requestRaw(info, data) {
+        return new Promise((resolve, reject) => {
+            let callbackForResult = function (err, res) {
+                if (err) {
+                    reject(err);
+                }
+                resolve(res);
+            };
+            this.requestRawWithCallback(info, data, callbackForResult);
+        });
+    }
+    /**
+     * Raw request with callback.
+     * @param info
+     * @param data
+     * @param onResult
+     */
+    requestRawWithCallback(info, data, onResult) {
+        let socket;
+        if (typeof (data) === 'string') {
+            info.options.headers["Content-Length"] = Buffer.byteLength(data, 'utf8');
+        }
+        let callbackCalled = false;
+        let handleResult = (err, res) => {
+            if (!callbackCalled) {
+                callbackCalled = true;
+                onResult(err, res);
+            }
+        };
+        let req = info.httpModule.request(info.options, (msg) => {
+            let res = new HttpClientResponse(msg);
+            handleResult(null, res);
+        });
+        req.on('socket', (sock) => {
+            socket = sock;
+        });
+        // If we ever get disconnected, we want the socket to timeout eventually
+        req.setTimeout(this._socketTimeout || 3 * 60000, () => {
+            if (socket) {
+                socket.end();
+            }
+            handleResult(new Error('Request timeout: ' + info.options.path), null);
+        });
+        req.on('error', function (err) {
+            // err has statusCode property
+            // res should have headers
+            handleResult(err, null);
+        });
+        if (data && typeof (data) === 'string') {
+            req.write(data, 'utf8');
+        }
+        if (data && typeof (data) !== 'string') {
+            data.on('close', function () {
+                req.end();
+            });
+            data.pipe(req);
+        }
+        else {
+            req.end();
+        }
+    }
+    /**
+     * Gets an http agent. This function is useful when you need an http agent that handles
+     * routing through a proxy server - depending upon the url and proxy environment variables.
+     * @param serverUrl  The server URL where the request will be sent. For example, https://api.github.com
+     */
+    getAgent(serverUrl) {
+        let parsedUrl = url.parse(serverUrl);
+        return this._getAgent(parsedUrl);
+    }
+    _prepareRequest(method, requestUrl, headers) {
+        const info = {};
+        info.parsedUrl = requestUrl;
+        const usingSsl = info.parsedUrl.protocol === 'https:';
+        info.httpModule = usingSsl ? https : http;
+        const defaultPort = usingSsl ? 443 : 80;
+        info.options = {};
+        info.options.host = info.parsedUrl.hostname;
+        info.options.port = info.parsedUrl.port ? parseInt(info.parsedUrl.port) : defaultPort;
+        info.options.path = (info.parsedUrl.pathname || '') + (info.parsedUrl.search || '');
+        info.options.method = method;
+        info.options.headers = this._mergeHeaders(headers);
+        if (this.userAgent != null) {
+            info.options.headers["user-agent"] = this.userAgent;
+        }
+        info.options.agent = this._getAgent(info.parsedUrl);
+        // gives handlers an opportunity to participate
+        if (this.handlers) {
+            this.handlers.forEach((handler) => {
+                handler.prepareRequest(info.options);
+            });
+        }
+        return info;
+    }
+    _mergeHeaders(headers) {
+        const lowercaseKeys = obj => Object.keys(obj).reduce((c, k) => (c[k.toLowerCase()] = obj[k], c), {});
+        if (this.requestOptions && this.requestOptions.headers) {
+            return Object.assign({}, lowercaseKeys(this.requestOptions.headers), lowercaseKeys(headers));
+        }
+        return lowercaseKeys(headers || {});
+    }
+    _getExistingOrDefaultHeader(additionalHeaders, header, _default) {
+        const lowercaseKeys = obj => Object.keys(obj).reduce((c, k) => (c[k.toLowerCase()] = obj[k], c), {});
+        let clientHeader;
+        if (this.requestOptions && this.requestOptions.headers) {
+            clientHeader = lowercaseKeys(this.requestOptions.headers)[header];
+        }
+        return additionalHeaders[header] || clientHeader || _default;
+    }
+    _getAgent(parsedUrl) {
+        let agent;
+        let proxyUrl = pm.getProxyUrl(parsedUrl);
+        let useProxy = proxyUrl && proxyUrl.hostname;
+        if (this._keepAlive && useProxy) {
+            agent = this._proxyAgent;
+        }
+        if (this._keepAlive && !useProxy) {
+            agent = this._agent;
+        }
+        // if agent is already assigned use that agent.
+        if (!!agent) {
+            return agent;
+        }
+        const usingSsl = parsedUrl.protocol === 'https:';
+        let maxSockets = 100;
+        if (!!this.requestOptions) {
+            maxSockets = this.requestOptions.maxSockets || http.globalAgent.maxSockets;
+        }
+        if (useProxy) {
+            // If using proxy, need tunnel
+            if (!tunnel) {
+                tunnel = __webpack_require__(856);
+            }
+            const agentOptions = {
+                maxSockets: maxSockets,
+                keepAlive: this._keepAlive,
+                proxy: {
+                    proxyAuth: proxyUrl.auth,
+                    host: proxyUrl.hostname,
+                    port: proxyUrl.port
+                },
+            };
+            let tunnelAgent;
+            const overHttps = proxyUrl.protocol === 'https:';
+            if (usingSsl) {
+                tunnelAgent = overHttps ? tunnel.httpsOverHttps : tunnel.httpsOverHttp;
+            }
+            else {
+                tunnelAgent = overHttps ? tunnel.httpOverHttps : tunnel.httpOverHttp;
+            }
+            agent = tunnelAgent(agentOptions);
+            this._proxyAgent = agent;
+        }
+        // if reusing agent across request and tunneling agent isn't assigned create a new agent
+        if (this._keepAlive && !agent) {
+            const options = { keepAlive: this._keepAlive, maxSockets: maxSockets };
+            agent = usingSsl ? new https.Agent(options) : new http.Agent(options);
+            this._agent = agent;
+        }
+        // if not using private agent and tunnel agent isn't setup then use global agent
+        if (!agent) {
+            agent = usingSsl ? https.globalAgent : http.globalAgent;
+        }
+        if (usingSsl && this._ignoreSslError) {
+            // we don't want to set NODE_TLS_REJECT_UNAUTHORIZED=0 since that will affect request for entire process
+            // http.RequestOptions doesn't expose a way to modify RequestOptions.agent.options
+            // we have to cast it to any and change it directly
+            agent.options = Object.assign(agent.options || {}, { rejectUnauthorized: false });
+        }
+        return agent;
+    }
+    _performExponentialBackoff(retryNumber) {
+        retryNumber = Math.min(ExponentialBackoffCeiling, retryNumber);
+        const ms = ExponentialBackoffTimeSlice * Math.pow(2, retryNumber);
+        return new Promise(resolve => setTimeout(() => resolve(), ms));
+    }
+    static dateTimeDeserializer(key, value) {
+        if (typeof value === 'string') {
+            let a = new Date(value);
+            if (!isNaN(a.valueOf())) {
+                return a;
+            }
+        }
+        return value;
+    }
+    async _processResponse(res, options) {
+        return new Promise(async (resolve, reject) => {
+            const statusCode = res.message.statusCode;
+            const response = {
+                statusCode: statusCode,
+                result: null,
+                headers: {}
+            };
+            // not found leads to null obj returned
+            if (statusCode == HttpCodes.NotFound) {
+                resolve(response);
+            }
+            let obj;
+            let contents;
+            // get the result from the body
+            try {
+                contents = await res.readBody();
+                if (contents && contents.length > 0) {
+                    if (options && options.deserializeDates) {
+                        obj = JSON.parse(contents, HttpClient.dateTimeDeserializer);
+                    }
+                    else {
+                        obj = JSON.parse(contents);
+                    }
+                    response.result = obj;
+                }
+                response.headers = res.message.headers;
+            }
+            catch (err) {
+                // Invalid resource (contents not json);  leaving result obj null
+            }
+            // note that 3xx redirects are handled by the http layer.
+            if (statusCode > 299) {
+                let msg;
+                // if exception/error in body, attempt to get better error
+                if (obj && obj.message) {
+                    msg = obj.message;
+                }
+                else if (contents && contents.length > 0) {
+                    // it may be the case that the exception is in the body message as string
+                    msg = contents;
+                }
+                else {
+                    msg = "Failed request: (" + statusCode + ")";
+                }
+                let err = new Error(msg);
+                // attach statusCode and body obj (if available) to the error object
+                err['statusCode'] = statusCode;
+                if (response.result) {
+                    err['result'] = response.result;
+                }
+                reject(err);
+            }
+            else {
+                resolve(response);
+            }
+        });
+    }
+}
+exports.HttpClient = HttpClient;
+
+
+/***/ }),
+
 /***/ 550:
 /***/ (function(module, __unusedexports, __webpack_require__) {
 
@@ -7295,7 +8106,7 @@ const niceTry = __webpack_require__(948);
 const resolveCommand = __webpack_require__(489);
 const escape = __webpack_require__(462);
 const readShebang = __webpack_require__(389);
-const semver = __webpack_require__(48);
+const semver = __webpack_require__(280);
 
 const isWin = process.platform === 'win32';
 const isExecutableRegExp = /\.(?:com|exe)$/i;
@@ -7446,56 +8257,6 @@ module.exports = require("http");
 
 /***/ }),
 
-/***/ 613:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-const { requestLog } = __webpack_require__(916);
-const {
-  restEndpointMethods
-} = __webpack_require__(842);
-
-const Core = __webpack_require__(529);
-
-const CORE_PLUGINS = [
-  __webpack_require__(190),
-  __webpack_require__(19), // deprecated: remove in v17
-  requestLog,
-  __webpack_require__(148),
-  restEndpointMethods,
-  __webpack_require__(430),
-
-  __webpack_require__(850) // deprecated: remove in v17
-];
-
-const OctokitRest = Core.plugin(CORE_PLUGINS);
-
-function DeprecatedOctokit(options) {
-  const warn =
-    options && options.log && options.log.warn
-      ? options.log.warn
-      : console.warn;
-  warn(
-    '[@octokit/rest] `const Octokit = require("@octokit/rest")` is deprecated. Use `const { Octokit } = require("@octokit/rest")` instead'
-  );
-  return new OctokitRest(options);
-}
-
-const Octokit = Object.assign(DeprecatedOctokit, {
-  Octokit: OctokitRest
-});
-
-Object.keys(OctokitRest).forEach(key => {
-  /* istanbul ignore else */
-  if (OctokitRest.hasOwnProperty(key)) {
-    Octokit[key] = OctokitRest[key];
-  }
-});
-
-module.exports = Octokit;
-
-
-/***/ }),
-
 /***/ 614:
 /***/ (function(module) {
 
@@ -7557,6 +8318,13 @@ module.exports = require("path");
 
 /***/ }),
 
+/***/ 631:
+/***/ (function(module) {
+
+module.exports = require("net");
+
+/***/ }),
+
 /***/ 649:
 /***/ (function(module, __unusedexports, __webpack_require__) {
 
@@ -7566,28 +8334,6 @@ const getPage = __webpack_require__(265)
 
 function getLastPage (octokit, link, headers) {
   return getPage(octokit, link, 'last', headers)
-}
-
-
-/***/ }),
-
-/***/ 650:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-module.exports = getUserAgentNode
-
-const osName = __webpack_require__(2)
-
-function getUserAgentNode () {
-  try {
-    return `Node.js/${process.version.substr(1)} (${osName()}; ${process.arch})`
-  } catch (error) {
-    if (/wmic os get Caption/.test(error.message)) {
-      return 'Windows <version undetectable>'
-    }
-
-    throw error
-  }
 }
 
 
@@ -22603,25 +23349,10 @@ function registerPlugin(plugins, pluginFunction) {
 
 /***/ }),
 
-/***/ 862:
-/***/ (function(module) {
+/***/ 856:
+/***/ (function(module, __unusedexports, __webpack_require__) {
 
-module.exports = class GraphqlError extends Error {
-  constructor (request, response) {
-    const message = response.data.errors[0].message
-    super(message)
-
-    Object.assign(this, response.data)
-    this.name = 'GraphqlError'
-    this.request = request
-
-    // Maintains proper stack trace (only available on V8)
-    /* istanbul ignore next */
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor)
-    }
-  }
-}
+module.exports = __webpack_require__(141);
 
 
 /***/ }),
@@ -23777,6 +24508,99 @@ module.exports = set;
 
 /***/ }),
 
+/***/ 898:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+
+Object.defineProperty(exports, '__esModule', { value: true });
+
+var request = __webpack_require__(753);
+var universalUserAgent = __webpack_require__(796);
+
+const VERSION = "4.3.1";
+
+class GraphqlError extends Error {
+  constructor(request, response) {
+    const message = response.data.errors[0].message;
+    super(message);
+    Object.assign(this, response.data);
+    this.name = "GraphqlError";
+    this.request = request; // Maintains proper stack trace (only available on V8)
+
+    /* istanbul ignore next */
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, this.constructor);
+    }
+  }
+
+}
+
+const NON_VARIABLE_OPTIONS = ["method", "baseUrl", "url", "headers", "request", "query"];
+function graphql(request, query, options) {
+  options = typeof query === "string" ? options = Object.assign({
+    query
+  }, options) : options = query;
+  const requestOptions = Object.keys(options).reduce((result, key) => {
+    if (NON_VARIABLE_OPTIONS.includes(key)) {
+      result[key] = options[key];
+      return result;
+    }
+
+    if (!result.variables) {
+      result.variables = {};
+    }
+
+    result.variables[key] = options[key];
+    return result;
+  }, {});
+  return request(requestOptions).then(response => {
+    if (response.data.errors) {
+      throw new GraphqlError(requestOptions, {
+        data: response.data
+      });
+    }
+
+    return response.data.data;
+  });
+}
+
+function withDefaults(request$1, newDefaults) {
+  const newRequest = request$1.defaults(newDefaults);
+
+  const newApi = (query, options) => {
+    return graphql(newRequest, query, options);
+  };
+
+  return Object.assign(newApi, {
+    defaults: withDefaults.bind(null, newRequest),
+    endpoint: request.request.endpoint
+  });
+}
+
+const graphql$1 = withDefaults(request.request, {
+  headers: {
+    "user-agent": `octokit-graphql.js/${VERSION} ${universalUserAgent.getUserAgent()}`
+  },
+  method: "POST",
+  url: "/graphql"
+});
+function withCustomRequest(customRequest) {
+  return withDefaults(customRequest, {
+    method: "POST",
+    url: "/graphql"
+  });
+}
+
+exports.graphql = graphql$1;
+exports.withCustomRequest = withCustomRequest;
+//# sourceMappingURL=index.js.map
+
+
+/***/ }),
+
 /***/ 916:
 /***/ (function(__unusedmodule, exports) {
 
@@ -23847,6 +24671,71 @@ module.exports = function(fn) {
 	try { return fn() } catch (e) {}
 
 }
+
+/***/ }),
+
+/***/ 950:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", { value: true });
+const url = __webpack_require__(835);
+function getProxyUrl(reqUrl) {
+    let usingSsl = reqUrl.protocol === 'https:';
+    let proxyUrl;
+    if (checkBypass(reqUrl)) {
+        return proxyUrl;
+    }
+    let proxyVar;
+    if (usingSsl) {
+        proxyVar = process.env["https_proxy"] ||
+            process.env["HTTPS_PROXY"];
+    }
+    else {
+        proxyVar = process.env["http_proxy"] ||
+            process.env["HTTP_PROXY"];
+    }
+    if (proxyVar) {
+        proxyUrl = url.parse(proxyVar);
+    }
+    return proxyUrl;
+}
+exports.getProxyUrl = getProxyUrl;
+function checkBypass(reqUrl) {
+    if (!reqUrl.hostname) {
+        return false;
+    }
+    let noProxy = process.env["no_proxy"] || process.env["NO_PROXY"] || '';
+    if (!noProxy) {
+        return false;
+    }
+    // Determine the request port
+    let reqPort;
+    if (reqUrl.port) {
+        reqPort = Number(reqUrl.port);
+    }
+    else if (reqUrl.protocol === 'http:') {
+        reqPort = 80;
+    }
+    else if (reqUrl.protocol === 'https:') {
+        reqPort = 443;
+    }
+    // Format the request hostname and hostname with port
+    let upperReqHosts = [reqUrl.hostname.toUpperCase()];
+    if (typeof reqPort === 'number') {
+        upperReqHosts.push(`${upperReqHosts[0]}:${reqPort}`);
+    }
+    // Compare request host against noproxy
+    for (let upperNoProxyItem of noProxy.split(',').map(x => x.trim().toUpperCase()).filter(x => x)) {
+        if (upperReqHosts.some(x => x === upperNoProxyItem)) {
+            return true;
+        }
+    }
+    return false;
+}
+exports.checkBypass = checkBypass;
+
 
 /***/ }),
 
