@@ -5,6 +5,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+
+    - uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: test-draft-tag-to-remove-${{ github.run_id }}
+        release_name: Test Draft Release To Remove
+        draft: true
+        prerelease: false
+    - uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: test-draft-tag-kept-${{ github.run_id }}
+        release_name: Test Draft Release Kept
+        draft: true
+        prerelease: false
+
+    - uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: test-prerelease-tag-to-remove-${{ github.run_id }}
+        release_name: Test Pre-Release To Remove
+        draft: false
+        prerelease: true
+    - uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: test-prerelease-tag-kept-${{ github.run_id }}
+        release_name: Test Pre-Release Kept
+        draft: false
+        prerelease: true
+
     - uses: ./
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
