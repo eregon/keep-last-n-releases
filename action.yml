@@ -8,6 +8,10 @@ inputs:
     description: 'File containing the tag of the last successful release, which should not be deleted'
     required: false
     default: ''
+  remove_tags_without_release:
+    description: 'Remove tags which do not have an associated release'
+    required: false
+    default: 'false'
   dry_run:
     description: 'Actually delete releases'
     required: false

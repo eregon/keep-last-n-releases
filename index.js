@@ -10,6 +10,7 @@ async function main() {
 
   const dryRun = core.getInput('dry_run') === 'true'
   const lastTagFile = core.getInput('last_tag_file')
+  const removeTagsWithoutRelease = core.getInput('remove_tags_without_release') === 'true'
 
   const github = new GitHub(process.env.GITHUB_TOKEN)
   const { owner, repo } = context.repo
@@ -53,16 +54,44 @@ async function main() {
         await github.repos.deleteRelease({ owner, repo, release_id: release.id })
 
         const tag = release.tag_name
-        const ref = `tags/${tag}`
         console.log(`Deleting tag ${tag}`)
-        try {
-          await github.git.deleteRef({ owner, repo, ref })
-        } catch (e) {
-          console.log(`Tag ${tag} does not exist: ${e.message}`)
-        }
+        await deleteTag(tag)
       }
     }
     core.endGroup()
+  }
+
+  async function cleanupTags(releases) {
+    core.startGroup('Removing tags without an associated release')
+
+    let { data: tags } = await github.repos.listTags({ owner, repo })
+    tags = tags.map(tag => tag.name)
+    console.log(`All tags: ${tags.join(', ')}`)
+
+    const releaseTags = new Set(releases.map(release => release.tag_name))
+    console.log(`All tags with a release: ${Array.from(releaseTags).join(', ')}`)
+
+    const toDelete = tags.filter(tag => !releaseTags.has(tag))
+
+    console.log(`${toDelete.length} tags to be deleted:`)
+    for (const tag of toDelete) {
+      if (dryRun) {
+        console.log(`Would delete ${tag}`)
+      } else {
+        console.log(`Deleting tag ${tag}`)
+        await deleteTag(tag)
+      }
+    }
+    core.endGroup()
+  }
+
+  async function deleteTag(tag) {
+    const ref = `tags/${tag}`
+    try {
+      await github.git.deleteRef({ owner, repo, ref })
+    } catch (e) {
+      console.log(`Tag ${tag} does not exist: ${e.message}`)
+    }
   }
 
   let { data: releases } = await github.repos.listReleases({ owner, repo })
@@ -72,6 +101,10 @@ async function main() {
 
   await cleanupReleases(fullReleases, "Full")
   await cleanupReleases(draftReleases, "Draft")
+
+  if (removeTagsWithoutRelease) {
+    await cleanupTags(releases)
+  }
 }
 
 function releaseDate(release) {
