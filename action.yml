@@ -13,7 +13,7 @@ inputs:
     required: false
     default: 'false'
   dry_run:
-    description: 'Actually delete releases'
+    description: 'Do not actually delete releases'
     required: false
     default: 'false'
 
