@@ -125,6 +125,9 @@ async function run() {
   } catch (error) {
     core.setFailed(error.stack)
   }
+  // Explicit process.exit() to not wait hanging promises,
+  // see https://github.com/ruby/setup-ruby/issues/543
+  process.exit()
 }
 
 run()
