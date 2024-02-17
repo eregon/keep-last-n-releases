@@ -1,6 +1,7 @@
 const fs = require('fs')
 const core = require('@actions/core')
-const { GitHub, context } = require('@actions/github')
+const github = require('@actions/github')
+const context = github.context
 
 async function main() {
   const n = parseInt(core.getInput('n'))
@@ -12,7 +13,7 @@ async function main() {
   const lastTagFile = core.getInput('last_tag_file')
   const removeTagsWithoutRelease = core.getInput('remove_tags_without_release') === 'true'
 
-  const github = new GitHub(process.env.GITHUB_TOKEN)
+  const octokit = github.getOctokit(process.env.GITHUB_TOKEN).rest
   const { owner, repo } = context.repo
 
   async function cleanupReleases(releases, kind) {
@@ -51,7 +52,7 @@ async function main() {
         console.log(`Would delete ${formatRelease(release)}`)
       } else {
         console.log(`\nDeleting ${formatRelease(release)}`)
-        await github.repos.deleteRelease({ owner, repo, release_id: release.id })
+        await octokit.repos.deleteRelease({ owner, repo, release_id: release.id })
 
         const tag = release.tag_name
         console.log(`Deleting tag ${tag}`)
@@ -64,7 +65,7 @@ async function main() {
   async function cleanupTags(releases) {
     core.startGroup('Removing tags without an associated release')
 
-    let { data: tags } = await github.repos.listTags({ owner, repo })
+    let { data: tags } = await octokit.repos.listTags({ owner, repo })
     tags = tags.map(tag => tag.name)
     console.log(`All tags: ${tags.join(', ')}`)
 
@@ -88,13 +89,13 @@ async function main() {
   async function deleteTag(tag) {
     const ref = `tags/${tag}`
     try {
-      await github.git.deleteRef({ owner, repo, ref })
+      await octokit.git.deleteRef({ owner, repo, ref })
     } catch (e) {
       console.log(`Tag ${tag} does not exist: ${e.message}`)
     }
   }
 
-  let { data: releases } = await github.repos.listReleases({ owner, repo })
+  let { data: releases } = await octokit.repos.listReleases({ owner, repo })
 
   const draftReleases = releases.filter(release => release.draft)
   const fullReleases = releases.filter(release => !release.draft)
