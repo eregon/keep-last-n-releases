@@ -6,26 +6,26 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - uses: softprops/action-gh-release@v1
+    - uses: softprops/action-gh-release@v2
       with:
         tag_name: v0.1.test-draft-tag-to-remove-${{ github.run_id }}
         name: Test Draft Release To Remove
         draft: true
         prerelease: false
-    - uses: softprops/action-gh-release@v1
+    - uses: softprops/action-gh-release@v2
       with:
         tag_name: v0.2.test-draft-tag-kept-${{ github.run_id }}
         name: Test Draft Release Kept
         draft: true
         prerelease: false
 
-    - uses: softprops/action-gh-release@v1
+    - uses: softprops/action-gh-release@v2
       with:
         tag_name: v0.3.test-prerelease-tag-to-remove-${{ github.run_id }}
         name: Test Pre-Release To Remove
         draft: false
         prerelease: true
-    - uses: softprops/action-gh-release@v1
+    - uses: softprops/action-gh-release@v2
       with:
         tag_name: v0.4.test-prerelease-tag-kept-${{ github.run_id }}
         name: Test Pre-Release Kept
