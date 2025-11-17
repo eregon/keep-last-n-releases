@@ -31845,7 +31845,7 @@ async function main() {
     throw new Error(`input n should be >= 1 (was ${n})`)
   }
 
-  const dryRun = core.getInput('dry_run') === 'true'
+  const dryRun = true // core.getInput('dry_run') === 'true'
   const lastTagFile = core.getInput('last_tag_file')
   const removeTagsWithoutRelease = core.getInput('remove_tags_without_release') === 'true'
 
