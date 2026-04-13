@@ -12,7 +12,7 @@ async function main() {
   const dryRun = core.getInput('dry_run') === 'true'
   const lastTagFile = core.getInput('last_tag_file')
   const removeTagsWithoutRelease = core.getInput('remove_tags_without_release') === 'true'
-  const removeTags = core.getInput('remove_tags') !== 'false'
+  const removeTags = core.getInput('remove_tags') === 'true'
 
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN).rest
   const { owner, repo } = context.repo
