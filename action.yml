@@ -12,6 +12,10 @@ inputs:
     description: 'Remove tags which do not have an associated release'
     required: false
     default: 'false'
+  remove_tags:
+    description: 'Delete tags in addition to releases'
+    required: false
+    default: 'true'
   dry_run:
     description: 'Do not actually delete releases'
     required: false
