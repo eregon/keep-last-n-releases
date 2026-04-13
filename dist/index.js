@@ -31848,6 +31848,7 @@ async function main() {
   const dryRun = core.getInput('dry_run') === 'true'
   const lastTagFile = core.getInput('last_tag_file')
   const removeTagsWithoutRelease = core.getInput('remove_tags_without_release') === 'true'
+  const removeTags = core.getInput('remove_tags') === 'true'
 
   const octokit = github.getOctokit(process.env.GITHUB_TOKEN).rest
   const { owner, repo } = context.repo
@@ -31890,9 +31891,11 @@ async function main() {
         console.log(`\nDeleting ${formatRelease(release)}`)
         await octokit.repos.deleteRelease({ owner, repo, release_id: release.id })
 
-        const tag = release.tag_name
-        console.log(`Deleting tag ${tag}`)
-        await deleteTag(tag)
+        if (removeTags) {
+          const tag = release.tag_name
+          console.log(`Deleting tag ${tag}`)
+          await deleteTag(tag)
+        }
       }
     }
     core.endGroup()
